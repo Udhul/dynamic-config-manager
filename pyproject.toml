@@ -17,10 +17,10 @@ packages = ["dynamic_config_manager"]
 version = {attr = "dynamic_config_manager.__version__"} # Read version from dynamic_config_manager/__init__.py
 dependencies = {file = ["requirements.txt"]} # Read dependencies from requirements.txt
 
-# --- Optional Sections (Commented Out) ---
+# --- Optional Sections (Commented Out) which we may use later ---
 
 # [project.scripts]
-# dcm-cli = "dynamic_config_manager.cli:main" # Example if CLI was needed
+# dcm-cli = "dynamic_config_manager.cli:main" # For later CLI
 
 # [tool.setuptools.package-data]
-# "dynamic_config_manager" = ["*.json", "data/*.json"] # Example if package data was needed
+# "dynamic_config_manager" = ["*.json", "data/*.json"] # For later package-data
