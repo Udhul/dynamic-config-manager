@@ -264,14 +264,17 @@ class ConfigInstance:
 
             # Get default value correctly, handling factories
             default_val = PydanticUndefined
-            if field_info.has_default():
-                default_val = field_info.get_default(call_default_factory=True)
+            # Check for default value using hasattr instead of method call
+            if hasattr(field_info, 'default') and field_info.default is not PydanticUndefined:
+                default_val = field_info.default
+            elif hasattr(field_info, 'default_factory') and field_info.default_factory is not None:
+                # Call the factory to get the default value
+                default_val = field_info.default_factory()
+        
             # Use value from _default_settings instance if available (covers nested defaults)
-            # This needs refinement for nested paths within dicts/lists
-            # For simple paths, instance default is more reliable
-            if current_instance_for_default is not None and hasattr(current_instance_for_default, '__class__') and field_key in current_instance_for_default.__class__.model_fields:
-                # This logic might be too simplistic for complex paths
-                pass # default_val is likely better from get_default() above
+            if current_instance_for_default is not None and hasattr(current_instance_for_default, '__class__') and field_key in getattr(current_instance_for_default.__class__, 'model_fields', {}):
+                # This might be more reliable than using default_val from field_info
+                pass
 
             metadata['default'] = default_val
 
