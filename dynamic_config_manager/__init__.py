@@ -25,7 +25,7 @@ from .manager import ConfigManager
 # to make defining configuration models easier for users.
 # TODO: Examine needed types
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import (
     Field,
     SecretStr,
@@ -39,6 +39,7 @@ from pydantic import (
     FilePath,
     DirectoryPath,
     Json,
+    BaseModel
 )
 
 __all__ = [
@@ -47,6 +48,7 @@ __all__ = [
 
     # Base class for models
     'BaseSettings',
+    'SettingsConfigDict',
 
     # Core Pydantic components for defining models
     'Field',
@@ -63,5 +65,8 @@ __all__ = [
     'FilePath',
     'DirectoryPath',
     'Json',
+
+    # BaseModel for nested structures
+    'BaseModel',
 ]
 
