@@ -23,6 +23,8 @@ from .manager import ConfigManager
 # --- Convenience Re-exports ---
 # Re-export key components from Pydantic and Pydantic-Settings
 # to make defining configuration models easier for users.
+# TODO: Examine needed types
+
 from pydantic_settings import BaseSettings
 from pydantic import (
     Field,
@@ -51,7 +53,7 @@ __all__ = [
     'SecretStr',
     'ValidationError',
 
-    # Common Pydantic types (examples)
+    # Common Pydantic types
     'EmailStr',
     'HttpUrl',
     'PositiveInt',
