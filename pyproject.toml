@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dynamic-config-manager" # Distribution name for 'pip install'
+description = "A singleton manager for handling multiple typed configuration sets using Pydantic/Pydantic-Settings."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+dynamic = ["dependencies", "version"]
+
+[tool.setuptools]
+packages = ["dynamic_config_manager"]
+
+[tool.setuptools.dynamic]
+version = {attr = "dynamic_config_manager.__version__"} # Read version from dynamic_config_manager/__init__.py
+dependencies = {file = ["requirements.txt"]} # Read dependencies from requirements.txt
+
+# --- Optional Sections (Commented Out) ---
+
+# [project.scripts]
+# dcm-cli = "dynamic_config_manager.cli:main" # Example if CLI was needed
+
+# [tool.setuptools.package-data]
+# "dynamic_config_manager" = ["*.json", "data/*.json"] # Example if package data was needed
