@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 import logging
 import copy
 from typing import Dict, Type, Optional, Any, List, TypeVar, Union
@@ -31,6 +32,8 @@ class ConfigInstance:
         self._settings_model: Type[SettingsModelType] = settings_model
         self._save_path = os.path.abspath(save_path) if save_path else None
         self._auto_save = auto_save
+        # Reference to the singleton config manager instance
+        self._manager = _manager_instance
 
         # --- State Management ---
         # 1. Original Defaults: Captured once from the model definition
@@ -51,10 +54,65 @@ class ConfigInstance:
         logger.info(f"Initialized ConfigInstance '{self.name}' (Model: {self._settings_model.__name__}, "
                     f"Save path: {self._save_path or 'None'}, AutoSave: {self._auto_save})")
 
+    def save(self, settings_object: Optional[SettingsModelType] = None):
+        """Saves the current active settings (or provided object) to the JSON file."""
+        save_path = self._resolve_save_path()
+        
+        if not save_path:
+            logger.warning(f"No save path specified for config '{self.name}' and no default directory configured. Cannot save.")
+            return False
+            
+        target_settings = settings_object if settings_object is not None else self._active_settings
+        
+        # Basic type check
+        if not isinstance(target_settings, self._settings_model.__class__):
+            logger.error(f"Attempted to save an object of incorrect type for config '{self.name}'.")
+            return False  # <-- Added return False here
+        
+        # Ensure the directory exists
+        save_dir = os.path.dirname(save_path)
+        if save_dir and not os.path.exists(save_dir):
+            try:
+                os.makedirs(save_dir, exist_ok=True)
+                logger.info(f"Created configuration directory: {save_dir}")
+            except OSError as e:
+                logger.error(f"Error creating directory {save_dir} for config '{self.name}': {e}", exc_info=True)
+                return False
+                
+        try:
+            config_data = target_settings.model_dump(mode='json', exclude_defaults=False)
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=4, ensure_ascii=False)
+            logger.info(f"Config '{self.name}' saved successfully to {save_path}")
+            return True
+        except TypeError as e:
+            logger.error(f"Serialization Error saving config '{self.name}'. Check data types. Error: {e}", exc_info=True)
+            return False
+        except Exception as e:
+            logger.error(f"Error writing config '{self.name}' to {save_path}: {e}", exc_info=True)
+            return False
+
+    def _resolve_save_path(self) -> Optional[str]:
+        """
+        Helper method to resolve the correct save path, using default if needed.
+        Returns None if no valid save path could be determined.
+        """
+        if self._save_path:
+            return self._save_path
+            
+        # No specific save path, try using default directory
+        default_dir = self._manager.default_save_dir
+        if default_dir:
+            return os.path.join(default_dir, f"{self.name}.json")
+            
+        # No default directory configured
+        return None
+    
     def _ensure_save_dir_exists(self):
         """Creates the directory for the save file if it doesn't exist."""
-        if self._save_path:
-            dir_name = os.path.dirname(self._save_path)
+        save_path = self._resolve_save_path()
+        if save_path:
+            dir_name = os.path.dirname(save_path)
             if dir_name and not os.path.exists(dir_name):
                 try:
                     os.makedirs(dir_name, exist_ok=True)
@@ -64,41 +122,36 @@ class ConfigInstance:
 
     def _load_or_get_defaults(self) -> SettingsModelType:
         """Loads settings from save_path using Pydantic, falling back to code defaults."""
-        if self._save_path and os.path.exists(self._save_path):
+        save_path = self._resolve_save_path()
+        
+        if save_path and os.path.exists(save_path):
             try:
-                logger.debug(f"Attempting to load config '{self.name}' from {self._save_path}")
-                # Pydantic-Settings can load directly, but let's explicitly load JSON
-                # for clarity and better error handling here.
-                with open(self._save_path, 'r', encoding='utf-8') as f:
+                logger.debug(f"Attempting to load config '{self.name}' from {save_path}")
+                # Load and validate from the resolved path
+                with open(save_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-
-                # Instantiate the model with loaded data. Pydantic does the merging:
-                # - Values from `data` override model defaults.
-                # - Keys missing in `data` use model defaults.
-                # - Validation is performed based on the model definition.
-                # - Extra keys in `data` are handled by model_config (e.g., ignored).
+                
                 loaded_settings = self._settings_model(**data)
-                logger.info(f"Successfully loaded and validated config '{self.name}' from {self._save_path}")
+                logger.info(f"Successfully loaded and validated config '{self.name}' from {save_path}")
                 return loaded_settings
-
+                
             except json.JSONDecodeError as e:
-                logger.warning(f"Invalid JSON in config file '{self._save_path}' for '{self.name}'. Using defaults. Error: {e}")
+                logger.warning(f"Invalid JSON in config file '{save_path}' for '{self.name}'. Using defaults. Error: {e}")
             except ValidationError as e:
-                # Log the validation error but proceed with defaults - file needs fixing.
-                logger.warning(f"Data validation errors loading config '{self.name}' from '{self._save_path}'. "
-                               f"Using defaults. Please check/fix the file. Errors:\n{e}")
-            except FileNotFoundError: # Should be caught by os.path.exists, but safety first
-                logger.warning(f"Config file '{self._save_path}' not found for '{self.name}' during load attempt. Using defaults.")
-            except Exception as e: # Catch other potential issues
-                logger.error(f"Unexpected error loading config '{self.name}' from {self._save_path}. Using defaults. Error: {e}", exc_info=True)
+                logger.warning(f"Data validation errors loading config '{self.name}' from '{save_path}'. "
+                            f"Using defaults. Please check/fix the file. Errors:\n{e}")
+            except FileNotFoundError:
+                logger.warning(f"Config file '{save_path}' not found for '{self.name}' during load attempt. Using defaults.")
+            except Exception as e:
+                logger.error(f"Unexpected error loading config '{self.name}' from {save_path}. Using defaults. Error: {e}", exc_info=True)
         else:
-            if self._save_path:
-                logger.info(f"Config file '{self._save_path}' not found for '{self.name}'. Initializing with defaults.")
+            if save_path:
+                logger.info(f"Config file '{save_path}' not found for '{self.name}'. Initializing with defaults.")
                 # Create the file from default immediately if missing
                 self.save(self._default_settings)
             else:
                 logger.info(f"No save path for '{self.name}'. Initializing with defaults.")
-
+                
         # Fallback: Return a pristine copy of the original defaults
         logger.debug(f"Using code-defined defaults for '{self.name}'.")
         return self._default_settings.model_copy(deep=True)
@@ -352,35 +405,6 @@ class ConfigInstance:
 
         return paths
 
-    def save(self, settings_object: Optional[SettingsModelType] = None):
-        """Saves the current active settings (or provided object) to the JSON file."""
-        if not self._save_path:
-            logger.warning(f"No save path specified for config '{self.name}'. Cannot save.")
-            return False
-
-        target_settings = settings_object if settings_object is not None else self._active_settings
-        # Basic type check (might not catch subclasses perfectly if generic isn't bound)
-        if not isinstance(target_settings, self._settings_model.__class__):
-            logger.error(f"Attempted to save an object of incorrect type for config '{self.name}'.")
-            # return False # Be more lenient?
-
-        self._ensure_save_dir_exists()
-        try:
-            # Use mode='json' for JSON-serializable types like HttpUrl, SecretStr etc.
-            # exclude_defaults=False makes the file more explicit.
-            config_data = target_settings.model_dump(mode='json', exclude_defaults=False)
-
-            with open(self._save_path, 'w', encoding='utf-8') as f:
-                json.dump(config_data, f, indent=4, ensure_ascii=False)
-            logger.info(f"Config '{self.name}' saved successfully to {self._save_path}")
-            return True
-        except TypeError as e:
-            logger.error(f"Serialization Error saving config '{self.name}'. Check data types. Error: {e}", exc_info=True)
-            return False
-        except Exception as e:
-            logger.error(f"Error writing config '{self.name}' to {self._save_path}: {e}", exc_info=True)
-            return False
-
     def restore_key_to_default(self, key_path: str):
         """Restores a single key (using path) in the active config to its original code-defined default value."""
         try:
@@ -431,8 +455,44 @@ class _ConfigManagerInternal:
     """Internal implementation of the ConfigManager."""
     def __init__(self):
         self._configs: Dict[str, ConfigInstance] = {}
+        # Set the default save directory to temp folder
+        self._default_save_dir = os.path.join(tempfile.gettempdir(), "Dynamic-Config-Manager")
         logger.info("Dynamic Config Manager initialized.")
 
+    @property
+    def default_save_dir(self) -> Optional[str]:
+        """Returns the default directory where configs are saved if no specific path is provided."""
+        return self._default_save_dir
+        
+    @default_save_dir.setter
+    def default_save_dir(self, path: Optional[str]):
+        """Sets the default save directory."""
+        self.set_default_save_dir(path)
+    
+    def set_default_save_dir(self, path: Optional[str]) -> str:
+        """
+        Sets the default directory where configs will be saved when no specific path is provided.
+        If path is None, reverts to using the temp directory.
+        Ensures the directory exists.
+        """
+        if path is None:
+            # Use temp directory if None is provided
+            self._default_save_dir = os.path.join(tempfile.gettempdir(), "Dynamic-Config-Manager")
+        else:
+            # Use provided path
+            self._default_save_dir = os.path.abspath(path)
+        
+        # Ensure the directory exists
+        if self._default_save_dir and not os.path.exists(self._default_save_dir):
+            try:
+                os.makedirs(self._default_save_dir, exist_ok=True)
+                logger.info(f"Created default configuration directory: {self._default_save_dir}")
+            except OSError as e:
+                logger.warning(f"Could not create default save directory {self._default_save_dir}. Error: {e}")
+                
+        logger.info(f"Default save directory set to: {self._default_save_dir}")
+        return self._default_save_dir
+    
     def register_config(self,
                         name: str,
                         settings_model: Type[SettingsModelType],
@@ -486,20 +546,19 @@ class _ConfigManagerInternal:
         return self._configs.get(name, default)
 
     def save_all(self):
-        """Saves all registered configurations that have a save path."""
+        """Saves all registered configurations."""
         logger.info("Attempting to save all configurations...")
         saved_count = 0
         failed_count = 0
         for name, config in self._configs.items():
-            if config._save_path:
-               if config.save():
-                   saved_count += 1
-               else:
-                   failed_count += 1
-                   logger.warning(f"Failed to save config '{name}'.")
+            # Try to save each config (uses default save path if needed)
+            if config.save():
+                saved_count += 1
             else:
-                logger.debug(f"Skipping save for config '{name}' (no save path).")
-        logger.info(f"Save all complete. Saved: {saved_count}, Failed/Not Savable: {len(self._configs) - saved_count}")
+                failed_count += 1
+                logger.warning(f"Failed to save config '{name}'.")
+        
+        logger.info(f"Save all complete. Saved: {saved_count}, Failed: {failed_count}")
 
     def restore_all_defaults(self):
         """Restores all registered configurations to their original code-defined default values."""
