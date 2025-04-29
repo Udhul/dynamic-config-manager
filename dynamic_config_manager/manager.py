@@ -65,7 +65,7 @@ class ConfigInstance:
         target_settings = settings_object if settings_object is not None else self._active_settings
         
         # Basic type check
-        if not isinstance(target_settings, self._settings_model.__class__):
+        if not isinstance(target_settings, self._settings_model):
             logger.error(f"Attempted to save an object of incorrect type for config '{self.name}'.")
             return False  # <-- Added return False here
         
