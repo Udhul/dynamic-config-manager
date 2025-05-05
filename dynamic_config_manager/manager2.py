@@ -4,30 +4,27 @@
 from __future__ import annotations
 
 import json
-import yaml
+import logging
 import os
 import tempfile
-import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, TypeVar, Union
 
-from pydantic import BaseModel, ValidationError, VersionError
+from pydantic import BaseModel, ValidationError
 from pydantic.json import pydantic_encoder
 from pydantic_settings import BaseSettings
 
 __all__ = ["ConfigManager"]
 
 log = logging.getLogger(__name__)
-
 T = TypeVar("T", bound=BaseSettings)
 
 # --------------------------------------------------------------------------- #
-#                           _helpers                                          #
+#                              helpers                                         #
 # --------------------------------------------------------------------------- #
 
 
 def _deep_get(data: Any, keys: List[str]) -> Any:
-    """Traverse model / dict / list using a key list."""
     cur = data
     for key in keys:
         if isinstance(cur, BaseModel):
@@ -37,58 +34,63 @@ def _deep_get(data: Any, keys: List[str]) -> Any:
         elif isinstance(cur, list):
             cur = cur[int(key)]
         else:
-            raise KeyError(f"Cannot traverse into {type(cur)} with key '{key}'.")
+            raise KeyError(f"Cannot traverse into {type(cur)} with '{key}'.")
     return cur
 
 
-def _deep_set(data: Any, keys: List[str], value: Any) -> Any:
-    """Return a *new* structure with `value` assigned at path `keys`."""
+def _deep_set(data: Any, keys: List[str], value: Any) -> BaseModel | Any:
     if not keys:
         return value
     head, *tail = keys
+
     if isinstance(data, BaseModel):
-        data_dict = data.model_dump(mode="python")
-        data_dict[head] = _deep_set(data_dict[head], tail, value)
-        return data.__class__(**data_dict)  # re-validate sub-tree
+        copied = data.model_dump(mode="python")
+        copied[head] = _deep_set(copied[head], tail, value)
+        return data.__class__(**copied)
+
     if isinstance(data, dict):
-        data = data.copy()
-        data[head] = _deep_set(data[head], tail, value)
-        return data
+        copied = {**data}
+        copied[head] = _deep_set(copied[head], tail, value)
+        return copied
+
     if isinstance(data, list):
         idx = int(head)
-        data = data.copy()
-        data[idx] = _deep_set(data[idx], tail, value)
-        return data
-    raise KeyError(f"Cannot traverse into {type(data)} with key '{head}'.")
+        copied = list(data)
+        copied[idx] = _deep_set(copied[idx], tail, value)
+        return copied
+
+    raise KeyError(f"Cannot traverse into {type(data)} with '{head}'.")
 
 
-def _guess_format(path: Path) -> str:
-    ext = path.suffix.lower()
-    if ext in {".yml", ".yaml"}:
-        return "yaml"
-    if ext == ".toml":
-        return "toml"
-    return "json"
+# ---------- file I/O -------------------------------------------------------- #
 
 
-def _load_file(path: Path, *, fmt: str | None = None) -> Dict[str, Any]:
-    fmt = fmt or _guess_format(path)
-    if fmt == "yaml" or fmt == "yml":
-        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+def _detect_format(path: Path) -> str:
+    ext = path.suffix.lower().lstrip(".")
+    return {"yml": "yaml", "yaml": "yaml", "toml": "toml"}.get(ext, "json")
+
+
+def _load_file(path: Path, *, file_format: Optional[str] = None) -> Dict[str, Any]:
+    fmt = (file_format or _detect_format(path)).lower()
+    text = path.read_text(encoding="utf-8")
+    if fmt == "yaml":
+        import yaml
+        return yaml.safe_load(text) or {}
     if fmt == "toml":
-        import tomllib  # stdlib ≥3.11
-        return tomllib.loads(path.read_text(encoding="utf-8"))
-    return json.loads(path.read_text(encoding="utf-8"))  # json
+        import tomllib
+        return tomllib.loads(text)
+    return json.loads(text)
 
 
-def _dump_file(path: Path, data: Dict[str, Any], *, fmt: str | None = None) -> None:
-    fmt = fmt or _guess_format(path)
-    if fmt == "yaml" or fmt == "yml":
+def _dump_file(path: Path, data: Dict[str, Any], *, file_format: Optional[str] = None):
+    fmt = (file_format or _detect_format(path)).lower()
+    if fmt == "yaml":
+        import yaml
         path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     elif fmt == "toml":
         import tomli_w
         path.write_text(tomli_w.dumps(data), encoding="utf-8")
-    else:  # json (default)
+    else:  # json
         path.write_text(
             json.dumps(data, indent=4, ensure_ascii=False, default=pydantic_encoder),
             encoding="utf-8",
@@ -96,151 +98,169 @@ def _dump_file(path: Path, data: Dict[str, Any], *, fmt: str | None = None) -> N
 
 
 # --------------------------------------------------------------------------- #
-#                           ConfigInstance                                    #
+#                          ConfigInstance                                     #
 # --------------------------------------------------------------------------- #
 
 
 class ConfigInstance:
-    """A single *typed* configuration set."""
+    """
+    One *typed* configuration.
+
+    Parameters
+    ----------
+    persistent : bool, default True
+        If False the instance never touches the disk.
+    """
 
     def __init__(
         self,
         *,
         name: str,
         model_cls: Type[T],
-        save_path: Optional[Path],
+        save_path: Path | None,
         auto_save: bool,
-    ) -> None:
+        persistent: bool = True,
+    ):
         self.name = name
         self._model_cls: Type[T] = model_cls
-        self._save_path: Optional[Path] = save_path
-        self._auto_save: bool = auto_save
+        self._save_path: Path | None = save_path if persistent else None
+        self._auto_save = auto_save and persistent
+        self._persistent = persistent
 
-        # cache
-        self._defaults: T = self._model_cls()  # from code
-        self._active: T = self._load_or_defaults()
+        self._defaults: T = self._model_cls()
+        self._active: T = self._load_from_disk() or self._defaults.model_copy(deep=True)
 
-    # ------------------------------------------------------------------ #
-    #   public surface                                                   #
-    # ------------------------------------------------------------------ #
+    # ------------ public (value access) -------------------------------- #
 
-    # read-only property – users should *not* mutate returned object
     @property
-    def active(self) -> T:  # noqa: D401
-        """Return the current **validated** settings instance."""
+    def active(self) -> T:
         return self._active
 
-    # ----- path API ---------------------------------------------------- #
-
     def get_value(self, path: str) -> Any:
-        """``cfg.get_value('database/host')``"""
-        keys = path.split("/")
-        return _deep_get(self._active, keys)
+        return _deep_get(self._active, path.split("/"))
 
-    def set_value(self, path: str, value: Any) -> None:
-        """Set value → re-validate whole tree → (optional) auto-save."""
-        keys = path.split("/")
+    def set_value(self, path: str, value: Any):
+        meta = self.get_metadata(path)
+        if meta.get("editable") is False:
+            raise PermissionError(f"Field '{path}' is not editable.")
+
         try:
-            new_instance = _deep_set(self._active, keys, value)
-            # editability check (metadata)
-            meta = self.get_metadata(path)
-            if meta.get("editable") is False:
-                raise PermissionError(f"Field '{path}' is marked editable=False.")
-            self._active = self._model_cls(**new_instance.model_dump(mode="python"))
+            new_inst = _deep_set(self._active, path.split("/"), value)
+            self._active = self._model_cls(**new_inst.model_dump(mode="python"))
         except ValidationError as e:
-            raise ValueError(f"Validation error while setting '{path}':\n{e}") from e
+            raise ValueError(f"Validation failed setting '{path}':\n{e}") from e
 
         if self._auto_save:
-            self.save()
+            self.persist()
 
-    def restore_value(self, path: str, source: str = "default") -> None:
-        """source = 'default' | 'file'"""
-        if source == "default":
-            val = _deep_get(self._defaults, path.split("/"))
-        elif source == "file":
-            on_disk = self._load_or_defaults()   # reload once
-            val = _deep_get(on_disk, path.split("/"))
-        else:
-            raise ValueError("source must be 'default' or 'file'")
-        self.set_value(path, val)
-
-    # ----- metadata ---------------------------------------------------- #
+    # ------------ metadata -------------------------------------------- #
 
     def get_metadata(self, path: str) -> Dict[str, Any]:
-        """Return consolidated metadata for the field at *path*."""
         keys = path.split("/")
-        cur_model: Union[Type[BaseModel], BaseModel] = self._model_cls
-        for key in keys:
-            if not hasattr(cur_model, "model_fields"):
-                raise KeyError(f"Path '{path}' is not a Pydantic model field.")
-            field = cur_model.model_fields[key]
-            cur_model = field.annotation
-        md = field.json_schema_extra or {}
-        md.update(
+        cur: Union[Type[BaseModel], BaseModel] = self._model_cls
+        for k in keys:
+            if not hasattr(cur, "model_fields"):
+                raise KeyError(f"'{path}' is not a model field.")
+            field = cur.model_fields[k]
+            cur = field.annotation
+
+        extra = dict(field.json_schema_extra or {})
+        extra.update(
             {
                 "type": field.annotation,
                 "required": field.is_required(),
                 "default": field.default,
-                "editable": md.get("editable", True),
+                "editable": extra.get("editable", True),
                 **_extract_constraints(field),
             }
         )
-        return md
+        return extra
 
-    # ----- persistence ------------------------------------------------- #
+    # ------------ restore helpers ------------------------------------- #
 
-    def save(self) -> bool:
+    def restore_value(self, path: str, source: str = "default"):
+        if source == "default":
+            new_val = _deep_get(self._defaults, path.split("/"))
+        elif source == "file":
+            disk = self._load_from_disk() or self._defaults
+            new_val = _deep_get(disk, path.split("/"))
+        else:
+            raise ValueError("source must be 'default' or 'file'")
+        self.set_value(path, new_val)
+
+    def restore_defaults(self):
+        self._active = self._defaults.model_copy(deep=True)
+        if self._auto_save:
+            self.persist()
+
+    # ------------ persistence ----------------------------------------- #
+
+    def persist(self, *, file_format: str | None = None) -> bool:
         if not self._save_path:
-            log.debug("No save path - nothing persisted.")
+            log.debug("Config '%s' is memory‑only; nothing persisted.", self.name)
             return False
         try:
             self._save_path.parent.mkdir(parents=True, exist_ok=True)
-            _dump_file(self._save_path, self._active.model_dump(mode="json"))
+            _dump_file(
+                self._save_path,
+                self._active.model_dump(mode="json"),
+                file_format=file_format,
+            )
             log.info("Config '%s' saved to %s", self.name, self._save_path)
             return True
-        except Exception as exc:  # pragma: no cover
-            log.warning("Could not save config '%s': %s", self.name, exc, exc_info=True)
+        except Exception as exc:
+            log.warning("Could not save '%s': %s", self.name, exc, exc_info=True)
             return False
 
-    def restore_defaults(self) -> None:
-        self._active = self._defaults.model_copy(deep=True)
-        if self._auto_save:
-            self.save()
+    save = persist  # alias
 
-    # ------------------------------------------------------------------ #
-    #   internal helpers                                                 #
-    # ------------------------------------------------------------------ #
+    def save_as(self, path: os.PathLike | str, *, file_format: str | None = None) -> bool:
+        path = Path(path).expanduser().resolve()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _dump_file(path, self._active.model_dump(mode="json"), file_format=file_format)
+            log.info("Config '%s' exported to %s", self.name, path)
+            return True
+        except Exception as exc:
+            log.warning("Export failed: %s", exc, exc_info=True)
+            return False
 
-    def _load_or_defaults(self) -> T:
-        if self._save_path and self._save_path.exists():
-            try:
-                data = _load_file(self._save_path)
-                return self._model_cls(**data)
-            except (ValidationError, ValueError, TypeError) as e:
-                log.warning(
-                    "Invalid data in %s for '%s' - falling back to defaults.\n%s",
-                    self._save_path,
-                    self.name,
-                    e,
-                )
-        else:
-            if self._save_path:
-                # bootstrap file with defaults
-                self.save(self._defaults)
-        return self._defaults.model_copy(deep=True)
+    # ------------ internal ------------------------------------------- #
 
-    # allow manual save of arbitrary object (bootstrapping)
-    def save(self, obj: Optional[T] = None) -> bool:  # type: ignore[override]
-        self._active = obj or self._active
-        return self.save()
+    def _load_from_disk(self) -> T | None:
+        if not (self._save_path and self._save_path.exists()):
+            return None
+        try:
+            data = _load_file(self._save_path)
+            return self._model_cls(**data)
+        except (ValidationError, json.JSONDecodeError, ValueError, TypeError) as e:
+            log.warning(
+                "Bad data in %s for '%s'; using defaults.  (%s)",
+                self._save_path,
+                self.name,
+                e,
+            )
+            return None
+
+
+# ---------- util ----------------------------------------------------------- #
 
 
 def _extract_constraints(field) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for meta in getattr(field, "metadata", ()):
-        for attr in ("ge", "gt", "le", "lt", "min_length", "max_length", "pattern"):
-            if getattr(meta, attr, None) is not None:
-                out[attr] = getattr(meta, attr)
+        for attr in (
+            "ge",
+            "gt",
+            "le",
+            "lt",
+            "min_length",
+            "max_length",
+            "pattern",
+            "multiple_of",
+        ):
+            if (val := getattr(meta, attr, None)) is not None:
+                out[attr] = val
     return out
 
 
@@ -250,17 +270,20 @@ def _extract_constraints(field) -> Dict[str, Any]:
 
 
 class _ConfigManagerInternal:
-    """The one & only manager instance."""
+    """
+    Global registry & default‑path resolver.
 
-    def __init__(self) -> None:
+    * The *initial* default directory is **tempfile.gettempdir()/dynamic_config_manager**.
+    * Set ``ConfigManager.default_dir = "/your/project/cfg"`` once early in your app
+      to persist every *subsequent* config there (unless it passes its own ``save_path``).
+    """
+
+    def __init__(self):
         self._instances: Dict[str, ConfigInstance] = {}
-        # ~/.cache/<app> if possible, else tmp
-        self._default_dir: Path = Path(
-            os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")
-        ).joinpath("dynamic_config_manager")
+        self._default_dir: Path = Path(tempfile.gettempdir()) / "dynamic_config_manager"
         self._default_dir.mkdir(parents=True, exist_ok=True)
 
-    # ------------- registration ---------------------------------------- #
+    # ---------- registration ------------------------------------------ #
 
     def register(
         self,
@@ -269,72 +292,65 @@ class _ConfigManagerInternal:
         *,
         save_path: str | os.PathLike | None = None,
         auto_save: bool = False,
+        persistent: bool = True,
     ) -> ConfigInstance:
-        """Create & register a **ConfigInstance**.
-
-        * If *save_path* is relative it is placed below the manager's
-          ``default_dir``.  ``None`` disables persistence.
-        * Raises ``ValueError`` on duplicates or invalid model types.
-        """
         if name in self._instances:
-            raise ValueError(f"Config '{name}' is already registered.")
+            raise ValueError(f"Config '{name}' already registered.")
         if not issubclass(model_cls, BaseSettings):
             raise TypeError("model_cls must subclass pydantic_settings.BaseSettings")
 
-        save_path = (
-            None
-            if save_path is None
-            else Path(save_path)
-            if os.path.isabs(str(save_path))
-            else self._default_dir / save_path
-        )
-        instance = ConfigInstance(
+        resolved_path = self._resolve_save_path(name, save_path, persistent)
+        inst = ConfigInstance(
             name=name,
             model_cls=model_cls,
-            save_path=save_path,
+            save_path=resolved_path,
             auto_save=auto_save,
+            persistent=persistent,
         )
-        self._instances[name] = instance
-        return instance
+        self._instances[name] = inst
+        return inst
 
-    # ------------- access helpers -------------------------------------- #
-
-    def get(self, name: str) -> ConfigInstance:
-        return self._instances[name]
-
-    __getitem__ = get  # cfg = ConfigManager['app']
-
-    # ------------- book-keeping ---------------------------------------- #
+    # ---------- default dir ------------------------------------------- #
 
     @property
-    def default_dir(self) -> Path:  # read-write
+    def default_dir(self) -> Path:
         return self._default_dir
 
     @default_dir.setter
-    def default_dir(self, path: str | os.PathLike) -> None:
-        self._default_dir = Path(path).expanduser().resolve()
-        self._default_dir.mkdir(parents=True, exist_ok=True)
+    def default_dir(self, path: str | os.PathLike | None):
+        if path is None:
+            self._default_dir = Path(tempfile.mkdtemp(prefix="dyn_cfg_mgr_"))
+        else:
+            self._default_dir = Path(path).expanduser().resolve()
+            self._default_dir.mkdir(parents=True, exist_ok=True)
 
-    # ------------- convenience ----------------------------------------- #
+    # ---------- convenience ------------------------------------------- #
 
-    def save_all(self) -> None:
-        for inst in self._instances.values():
-            inst.save()
-
-    def restore_all_defaults(self) -> None:
-        for inst in self._instances.values():
-            inst.restore_defaults()
-
-    # ------------- dunder sugar ---------------------------------------- #
+    def __getitem__(self, name: str) -> ConfigInstance:
+        return self._instances[name]
 
     def __iter__(self):
         return iter(self._instances.values())
 
-    def __len__(self) -> int:
-        return len(self._instances)
+    def save_all(self):
+        for inst in self._instances.values():
+            inst.persist()
 
-    def __contains__(self, item: str) -> bool:
-        return item in self._instances
+    def restore_all_defaults(self):
+        for inst in self._instances.values():
+            inst.restore_defaults()
+
+    # ---------- helpers ----------------------------------------------- #
+
+    def _resolve_save_path(
+        self, name: str, save_path: str | os.PathLike | None, persistent: bool
+    ) -> Path | None:
+        if not persistent:
+            return None
+        if save_path is None:
+            return self._default_dir / f"{name}.json"
+        p = Path(save_path).expanduser()
+        return p if p.is_absolute() else self._default_dir / p
 
 
 # --------------------------------------------------------------------------- #
