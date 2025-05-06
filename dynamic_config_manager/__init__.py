@@ -3,23 +3,58 @@
 # =============================================================
 """
 Dynamic-Config-Manager
-----------------------
+======================
 
-A *batterie-included* helper around **Pydantic-v2** + **pydantic-settings**.
+A *typed*, file-backed configuration framework that wraps **Pydantic-Settings v2**.
 
-Example
-~~~~~~~
->>> from dynamic_config_manager import ConfigManager, BaseSettings, Field
->>>
->>> class AppCfg(BaseSettings):
-...     username: str = Field("guest", json_schema_extra={"editable": False})
-...     refresh: int = Field(60, ge=5, le=3600,
-...                          json_schema_extra={"ui": "SpinBox", "suffix": "s"})
-...
->>> cfg = ConfigManager.register("app", AppCfg, save_path="app.json", auto_save=True)
->>> cfg.get_value("refresh")
-60
->>> cfg.set_value("refresh", 120)      # auto-saved + validated
+Main ideas
+~~~~~~~~~~
+* Each configuration is described by a **Pydantic BaseSettings** model - so
+  **all** type-checking, defaulting, clamping, “nearest match” logic, UI hints,
+  etc. live in the model itself (validators + `Field(json_schema_extra=…)`).
+* A small **manager singleton** keeps track of many configurations, gives them a
+  common *default* save directory, and makes bulk actions (`save_all`,
+  `restore_all_defaults`) trivial.
+* Per-config persistence is *opt-in* or *opt-out*:
+
+  * do nothing → file is saved to
+    `<default_dir>/<name>.json` **(default_dir is a stable folder inside
+    `tempfile.gettempdir()` unless you override it once early in your app)**;
+  * pass `save_path=` to push the file somewhere else;  
+  * pass `persistent=False` for memory-only configs.
+
+Quick example
+~~~~~~~~~~~~~
+```python
+from dynamic_config_manager import BaseSettings, Field, ConfigManager
+
+class CamCfg(BaseSettings):
+    spindle_speed: int = Field(
+        24_000, ge=4_000, le=24_000,
+        json_schema_extra={"step": 1_000, "ui": "SpinBox"}
+    )
+    tool: str = Field(
+        "flat",
+        json_schema_extra={
+            "options": ["flat", "ball", "vbit"],
+            "editable": True,
+            "ui": "ComboBox"
+        }
+    )
+
+# 1) Use app-wide directory once
+ConfigManager.default_dir = "~/my_project/config"
+
+# 2) Register the config; nothing else to remember
+cam_cfg = ConfigManager.register("cam", CamCfg, auto_save=True)
+
+# 3) Safe path-based access
+cam_cfg.set_value("spindle_speed", 18_000)   # validated + auto-saved
+print(cam_cfg.get_value("tool"))             # → "flat"
+
+# 4) Restore a single value or the whole file
+cam_cfg.restore_value("spindle_speed", source="default")
+# cam_cfg.restore_defaults()
 """
 
 from __future__ import annotations
@@ -36,9 +71,9 @@ except _meta.PackageNotFoundError:  # Editable checkout / source tree
     __version__ = "0.2.0"
 
 # --------------------------------------------------------------------- #
-# Logging – a library must *never* touch the root logger.
+# Logging
 # --------------------------------------------------------------------- #
-_logging.getLogger(__name__).addHandler(_logging.NullHandler())
+_logging.getLogger(__name__).addHandler(_logging.NullHandler()) # *never* touch the root logger.
 
 # --------------------------------------------------------------------- #
 # Public re-exports
@@ -46,7 +81,7 @@ _logging.getLogger(__name__).addHandler(_logging.NullHandler())
 from pydantic_settings import BaseSettings  # noqa: E402
 from pydantic import BaseModel, Field, ValidationError  # noqa: E402
 
-from .manager2 import ConfigManager  # noqa: E402  (singleton instance)
+from .manager import ConfigManager  # noqa: E402  (singleton instance)
 
 __all__ = [
     "ConfigManager",
@@ -55,85 +90,3 @@ __all__ = [
     "Field",
     "ValidationError",
 ]
-
-
-
-
-
-
-
-
-
-
-# """
-# Dynamic Config Manager:
-# A singleton manager for handling multiple typed configuration sets
-# using Pydantic and Pydantic-Settings.
-# """
-
-# # Read version dynamically from package metadata (or define here)
-# # This is needed for the dynamic version in pyproject.toml
-# __version__ = "0.1.0"
-
-# import logging
-
-# # Configure logging for the library
-# # Set default NullHandler to avoid "No handler found" warnings.
-# # Application code should configure logging properly.
-# logging.getLogger(__name__).addHandler(logging.NullHandler())
-
-# # --- Core Public Interface ---
-
-# # Expose the main manager singleton instance
-# from .manager import ConfigManager
-
-# # --- Convenience Re-exports ---
-# # Re-export key components from Pydantic and Pydantic-Settings
-# # to make defining configuration models easier for users.
-# # TODO: Examine needed types
-
-# from pydantic_settings import BaseSettings, SettingsConfigDict
-# from pydantic import (
-#     Field,
-#     SecretStr,
-#     EmailStr,
-#     HttpUrl,
-#     ValidationError,
-#     PositiveInt,
-#     NegativeInt,
-#     PositiveFloat,
-#     NegativeFloat,
-#     FilePath,
-#     DirectoryPath,
-#     Json,
-#     BaseModel
-# )
-
-# __all__ = [
-#     # Core manager
-#     'ConfigManager',
-
-#     # Base class for models
-#     'BaseSettings',
-#     'SettingsConfigDict',
-
-#     # Core Pydantic components for defining models
-#     'Field',
-#     'SecretStr',
-#     'ValidationError',
-
-#     # Common Pydantic types
-#     'EmailStr',
-#     'HttpUrl',
-#     'PositiveInt',
-#     'NegativeInt',
-#     'PositiveFloat',
-#     'NegativeFloat',
-#     'FilePath',
-#     'DirectoryPath',
-#     'Json',
-
-#     # BaseModel for nested structures
-#     'BaseModel',
-# ]
-
