@@ -77,8 +77,8 @@ def _load_file(path: Path, *, file_format: Optional[str] = None) -> Dict[str, An
         import yaml
         return yaml.safe_load(text) or {}
     if fmt == "toml":
-        import tomllib
-        return tomllib.loads(text)
+        import tomli
+        return tomli.loads(text)
     return json.loads(text)
 
 
