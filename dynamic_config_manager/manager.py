@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, TypeVar, Union
 
 from pydantic import BaseModel, ValidationError
-from pydantic.json import pydantic_encoder
+from pydantic_core import to_jsonable_python
 from pydantic_settings import BaseSettings
 
 __all__ = ["ConfigManager"]
@@ -92,7 +92,7 @@ def _dump_file(path: Path, data: Dict[str, Any], *, file_format: Optional[str] =
         path.write_text(tomli_w.dumps(data), encoding="utf-8")
     else:  # json
         path.write_text(
-            json.dumps(data, indent=4, ensure_ascii=False, default=pydantic_encoder),
+            json.dumps(data, indent=4, ensure_ascii=False, default=to_jsonable_python),
             encoding="utf-8",
         )
 
