@@ -1,5 +1,5 @@
 # =============================================================
-#  dynamic_config_manager/helpers.py
+#  dynamic_config_manager/validation.py
 #  Auto-validation helpers for Dynamic-Config-Manager
 # =============================================================
 
