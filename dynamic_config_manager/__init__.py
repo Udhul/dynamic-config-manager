@@ -82,6 +82,7 @@ from pydantic_settings import BaseSettings  # noqa: E402
 from pydantic import BaseModel, Field, ValidationError  # noqa: E402
 
 from .manager import ConfigManager  # noqa: E402  (singleton instance)
+from .validation import attach_auto_fix
 
 __all__ = [
     "ConfigManager",
@@ -89,4 +90,5 @@ __all__ = [
     "BaseModel",
     "Field",
     "ValidationError",
+    "attach_auto_fix"
 ]
