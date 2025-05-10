@@ -2,116 +2,185 @@
 #  dynamic_config_manager/validation.py
 #  Auto-validation helpers for Dynamic-Config-Manager
 # =============================================================
+"""High-level, *opt-in* utilities that attach model-level validators
+to a Pydantic model in order to **automatically**:
 
-# TODO: 
-# Allow specifying mode (default="before")
-# enum types for validation returns: ORIGINAL[value], MODIFIED[VALUE], FAILED, REJECTED, BYPASS[value]
-# Add bypass policy, which will allow bypassing either numeric or options validation.
-# For the validator, add logic that is able to handle all the pydantic constraint types, according to our validation policy and fallback policy: "ge", "gt", "le", "lt", "min_length", "max_length", "pattern", "multiple_of"
-# Add behavior for when a value does not fall within the constraints. This should allow controlling whether to do the following:
-# - attempt to clamp (for numeric) or find nearest (options)
-# - leave unchanged (current value)
-# - return to saved value (will match current if autosaved)
-# - return to default value from model
-# This behavior should also be able to be specified for the cases with validation fail or rejection
-# So we should restructure the logical validation flow, such that we can control what happens if pydantic checks fails (types/values):
-# - Validate with specified fallback policy:
-# Control what happens (in terms of fallback policy) in the case of validation, where 
-# - validation fails
-# - validator reject policy is specified
-# Avoid redundancy: Clear decision tree without repeats, that is able to handle all cases:
-# - normal pydantic success 
-# - validation success without change
-# - validation success, returning a modified value
-# - validation fails (error with type-coersion, or clamping or options-snapping)
-# - validation rejection (value or option fell outside range, and policy set to "reject")
-# - validation bypass -> always keep set value, ignoring validation for specified input type (numeric, or options, ...)
-# Use pydantic methods for type coersion in validator.
-# Have an option to allow eval() for converting string mathematical expressions into numeric (this may succeed or fail, which should be handled)
-# for eval expressions that are typed partially, for example: "/2", we would evaluate {current_value}/2. We can also use "x" or "v" for current value.
-# "x^2" would eval as {current_value}**2. "10+v^2-v/2" would evaluate as 10+{current_value}**2-{curent_value}/2. "min+max/2" would insert min and max values in the expression if they are set (and fail if not set)
-# We should make a function dedicated to evaluation handling
+* clamp numeric fields into their `ge/gt/le/lt` bounds
+* snap string fields to the *nearest* option from
+  `Field(..., json_schema_extra={"options": [...]})`
+* respect `min_length` / `max_length` / `multiple_of`
+* optionally *bypass* or *reject* invalid data
 
-# Make sure the auto_fix is going to trigger any time a config value is changed, if autofix is enabled.
-# Separate concerns into functions, which can be called individually, and as part of the auto_fix decorator function.
+The helper is completely **self-contained** - it does **not** reach out to
+`ConfigInstance`, so it can be reused in any Pydantic project.
 
-"""Light-weight utilities that can be *attached* to any Pydantic
-model to provide default 'fix-up' behaviour (clamp / nearest-match / etc.)
-without writing boilerplate validators for every field.
-
-Usage
------
+Basic usage
+-----------
 ```python
-from dynamic_config_manager.helpers import attach_auto_fix
+from dynamic_config_manager.validation import attach_auto_fix
 from dynamic_config_manager import BaseSettings, Field
 
-@attach_auto_fix
+@attach_auto_fix()      # optional knobs listed below
 class CamCfg(BaseSettings):
     spindle: int = Field(24000, ge=4000, le=24000)
-    tool: str   = Field("flat",
-                        json_schema_extra={"options": ["flat", "ball", "vbit"]})
+    tool: str   = Field(
+        "flat",
+        json_schema_extra={"options": ["flat", "ball", "vbit"]}
+    )
 ```
 
-Call `attach_auto_fix()` only *once* per model class.  You may pass
-`numeric_policy="reject"` or `options_policy="reject"` if you don't want the
-default `clamp` / `nearest` behaviour.
+Advanced usage
+--------------
+```python
+@attach_auto_fix(
+    mode="before",                 # 'before' or 'after'
+    numeric_policy="reject",       # clamp|reject|bypass
+    options_policy="nearest",      # nearest|reject|bypass
+    eval_expressions=True          # allow 'v*2', '/2', 'min+max/2' …
+)
+class MyCfg(BaseSettings):
+    ...
+```
 """
 
 from __future__ import annotations
 
-from typing import Any
+import ast
+import operator as _op
 from difflib import get_close_matches
+from enum import Enum
+from typing import Any
+
 from pydantic import BaseModel, model_validator
 from pydantic.fields import FieldInfo
+
+# ------------------------------------------------------------------
+# enums / policy helpers
+# ------------------------------------------------------------------
+
+class NumericPolicy(str, Enum):
+    CLAMP = "clamp"
+    REJECT = "reject"
+    BYPASS = "bypass"
+
+
+class OptionsPolicy(str, Enum):
+    NEAREST = "nearest"
+    REJECT = "reject"
+    BYPASS = "bypass"
+
+
+_SAFE_NAMES = {
+    "abs": abs,
+    "round": round,
+    "__builtins__": {},
+}
+_SAFE_BIN_OPS = {
+    ast.Add: _op.add,
+    ast.Sub: _op.sub,
+    ast.Mult: _op.mul,
+    ast.Div: _op.truediv,
+    ast.Pow: _op.pow,
+    ast.Mod: _op.mod,
+}
 
 
 # ------------------------------------------------------------------
 # internal helpers
 # ------------------------------------------------------------------
 
-def _auto_fix_numeric(val: Any, info: FieldInfo, policy: str) -> Any:
-    """Clamp *val* into the range specified by ge/gt/le/lt.
+def _safe_eval(expr: str, names: dict[str, Any]) -> float | None:
+    """Very small safe-eval for arithmetic expressions used in strings."""
 
-    Returns the possibly-modified value, or **None** if the value should be
-    rejected (and normal Pydantic validation should raise).
-    """
+    def _eval(node):
+        if isinstance(node, ast.Num):  # type: ignore[attr-defined]
+            return node.n
+        if isinstance(node, ast.Name):
+            return names.get(node.id)
+        if isinstance(node, ast.BinOp) and type(node.op) in _SAFE_BIN_OPS:
+            return _SAFE_BIN_OPS[type(node.op)](_eval(node.left), _eval(node.right))
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            return -_eval(node.operand)
+        raise ValueError("unsafe expression")
 
-    # best-effort coercion
+    try:
+        parsed = ast.parse(expr, mode="eval").body  # type: ignore[attr-defined]
+        return _eval(parsed)
+    except Exception:
+        return None
+
+
+def _auto_fix_numeric(
+    raw_val: Any,
+    info: FieldInfo,
+    *,
+    low: float | int | None,
+    high: float | int | None,
+    policy: NumericPolicy,
+    eval_allowed: bool,
+) -> Any | None:
+
+    # --- coercion / expression evaluation --------------------------------
+    val = raw_val
+    if isinstance(val, str) and eval_allowed:
+        expr = val
+        if expr.startswith(("/", "*", "+", "-")):
+            expr = f"v{expr}"
+        safe_names = dict(_SAFE_NAMES)
+        safe_names.update(
+            {
+                "v": raw_val,
+                "x": raw_val,
+                "min": low,
+                "max": high,
+            }
+        )
+        evaluated = _safe_eval(expr, safe_names)
+        if evaluated is not None:
+            val = evaluated
+
     if not isinstance(val, (int, float)):
         try:
             val = info.annotation(val)  # type: ignore[call-arg]
         except Exception:
+            if policy is NumericPolicy.BYPASS:
+                return raw_val
             return None
 
-    low = info.metadata.get("ge") or info.metadata.get("gt")
-    high = info.metadata.get("le") or info.metadata.get("lt")
-
+    # --- enforcement ------------------------------------------------------
     if low is None and high is None:
         return val
 
-    if policy == "clamp":
-        if low is not None and high is not None:
-            return max(low, min(high, val))
-        if low is not None:           # only lower bound
-            return max(low, val)
-        if high is not None:          # only upper bound
-            return min(high, val)
-    elif policy == "reject":
-        if (low is not None and val < low) or (high is not None and val > high):
-            return None
+    if policy is NumericPolicy.BYPASS:
+        return val
 
+    if policy is NumericPolicy.CLAMP:
+        if low is not None and val < low:
+            val = low
+        if high is not None and val > high:
+            val = high
+        return val
+
+    # policy == REJECT
+    if (low is not None and val < low) or (high is not None and val > high):
+        return None
     return val
 
 
-def _auto_fix_options(val: Any, opts: list[Any], policy: str) -> Any:
-    """Return *val* if valid, otherwise try nearest match or reject."""
-    if val in opts:
+def _auto_fix_options(
+    val: Any,
+    opts: list[Any],
+    *,
+    policy: OptionsPolicy,
+) -> Any | None:
+    if val in opts or policy is OptionsPolicy.BYPASS:
         return val
 
-    if policy == "nearest" and isinstance(val, str):
+    if policy is OptionsPolicy.NEAREST and isinstance(val, str):
         hit = get_close_matches(val, [str(o) for o in opts], n=1, cutoff=0.4)
         return hit[0] if hit else None
 
+    # reject
     return None
 
 
@@ -122,50 +191,82 @@ def _auto_fix_options(val: Any, opts: list[Any], policy: str) -> Any:
 def attach_auto_fix(
     cls: type[BaseModel],
     *,
-    numeric_policy: str = "clamp",
-    options_policy: str = "nearest",
+    mode: str = "before",
+    numeric_policy: str | NumericPolicy = "clamp",
+    options_policy: str | OptionsPolicy = "nearest",
+    eval_expressions: bool = False,
 ) -> type[BaseModel]:
-    """Attach a *model-level* `before` validator that auto-corrects data.
+    """Attach a model-level validator injecting automatic corrections.
 
     Parameters
     ----------
-    numeric_policy : {'clamp', 'reject'}
-        * `clamp` (default)     - snap into range
-        * `reject`              - leave invalid value so that field validation fails
-    options_policy : {'nearest', 'reject'}
-        * `nearest` (default)   - Levenshtein closest string
-        * `reject`              - leave invalid value
+    mode : 'before' | 'after'
+        Passed straight to `@model_validator`.
+    numeric_policy : 'clamp' | 'reject' | 'bypass'
+    options_policy : 'nearest' | 'reject' | 'bypass'
+    eval_expressions : bool
+        Enable arithmetic string evaluation (see docstring).
     """
 
-    @model_validator(mode="before")
+    num_policy = NumericPolicy(numeric_policy)
+    opt_policy = OptionsPolicy(options_policy)
+
+    @model_validator(mode=mode)
     def _auto(cls, raw: Any):  # noqa: D401
         if not isinstance(raw, dict):
             return raw
 
         fixed = dict(raw)
-        for name, info in cls.model_fields.items():
-            if name not in fixed:
+
+        for field_name, info in cls.model_fields.items():
+            if field_name not in fixed:
                 continue
+            val = fixed[field_name]
 
-            original_val = fixed[name]
-            new_val = original_val
+            # collect constraints
+            low = info.metadata.get("ge") or info.metadata.get("gt")
+            high = info.metadata.get("le") or info.metadata.get("lt")
+            m_len = info.metadata.get("min_length")
+            M_len = info.metadata.get("max_length")
+            mult_of = info.metadata.get("multiple_of")
 
-            # ---- numeric ----
-            if any(k in info.metadata for k in ("ge", "gt", "le", "lt")):
-                new_val = _auto_fix_numeric(new_val, info, numeric_policy)
+            # ---- numeric section ----------------------------------------
+            if low is not None or high is not None or mult_of is not None:
+                val = _auto_fix_numeric(
+                    val,
+                    info,
+                    low=low,
+                    high=high,
+                    policy=num_policy,
+                    eval_allowed=eval_expressions,
+                )
 
-            # ---- options ----
+            # ---- options section ----------------------------------------
             opts = (
                 info.json_schema_extra.get("options")  # type: ignore[attr-defined]
                 if info.json_schema_extra
                 else None
             )
             if opts:
-                new_val = _auto_fix_options(new_val, opts, options_policy)
+                val = _auto_fix_options(val, opts, policy=opt_policy)
 
-            # Keep original value if auto-fix failed (avoid None unless caller wants error)
-            if new_val is not None:
-                fixed[name] = new_val
+            # ---- length / multiple_of -----------------------------------
+            if val is not None and m_len is not None and hasattr(val, "__len__"):
+                if len(val) < m_len and num_policy is NumericPolicy.REJECT:
+                    val = None
+            if val is not None and M_len is not None and hasattr(val, "__len__"):
+                if len(val) > M_len and num_policy is NumericPolicy.REJECT:
+                    val = None
+            if val is not None and mult_of is not None and isinstance(val, (int, float)):
+                if (val / mult_of) % 1 != 0:
+                    if num_policy is NumericPolicy.CLAMP:
+                        val = round(val / mult_of) * mult_of
+                    elif num_policy is NumericPolicy.REJECT:
+                        val = None
+
+            # ------------- final assign ---------------------------------
+            if val is not None:
+                fixed[field_name] = val
 
         return fixed
 
