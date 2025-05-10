@@ -32,6 +32,9 @@
 # "x^2" would eval as {current_value}**2. "10+v^2-v/2" would evaluate as 10+{current_value}**2-{curent_value}/2. "min+max/2" would insert min and max values in the expression if they are set (and fail if not set)
 # We should make a function dedicated to evaluation handling
 
+# Make sure the auto_fix is going to trigger any time a config value is changed, if autofix is enabled.
+# Separate concerns into functions, which can be called individually, and as part of the auto_fix decorator function.
+
 """Light-weight utilities that can be *attached* to any Pydantic
 model to provide default 'fix-up' behaviour (clamp / nearest-match / etc.)
 without writing boilerplate validators for every field.
