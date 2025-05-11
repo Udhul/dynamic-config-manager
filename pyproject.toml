@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "dynamic-config-manager" # Distribution name for 'pip install'
 description = "A singleton manager for handling multiple typed configuration sets using Pydantic/Pydantic-Settings."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = { file = "LICENSE" }
 dynamic = ["dependencies", "version"]
 
