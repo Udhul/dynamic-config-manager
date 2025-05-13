@@ -1,35 +1,38 @@
-# Dynamic Config Manager - Developer Specification
+# Dynamic Config Manager - Developer Specification (v2)
 
 ## 1. Introduction
 
 ### 1.1. Project Goal
-To create a Python package, `dynamic-config-manager`, providing a robust, typed, and file-backed configuration framework. It wraps Pydantic (v2) `BaseSettings` to offer dynamic loading, updating, saving, validation, and management of application configurations, with advanced pre-processing capabilities.
+To create a Python package, `dynamic-config-manager`, providing a robust, typed, and file-backed configuration framework. It wraps Pydantic (v2) `BaseSettings` to offer dynamic loading, updating, saving, validation, and management of application configurations, with advanced pre-processing capabilities for various data formats.
 
 ### 1.2. Core Philosophy
 *   **Pydantic-centric:** Leverage Pydantic V2 for model definition, type checking, and core validation.
-*   **Typed:** Emphasize strong typing for configuration clarity and safety.
-*   **User-friendly:** Simple API for common tasks, with powerful customization options.
+*   **Typed:** Emphasize strong typing for configuration clarity and safety, with enhanced Pylance/LSP support.
+*   **User-friendly & Intuitive:** Simple API for common tasks, with powerful customization options, including an optional custom base class and field constructor for easier definition.
 *   **Explicit over Implicit:** Clear control over persistence, saving, and validation behaviors.
-*   **Separation of Concerns:** Auto-fix pre-processes data; Pydantic performs final validation.
+*   **Separation of Concerns:** `attach_auto_fix` pre-processes data based on defined formats and policies; Pydantic performs final validation against the model's type annotations and constraints.
 
 ### 1.3. Key Features Summary
-*   Configuration definition via Pydantic `BaseSettings` models.
+*   Configuration definition via Pydantic `BaseSettings` models, or an optional enhanced `DynamicBaseSettings` with a `ConfigField` helper for convenience.
 *   Singleton `ConfigManager` for centralized management of multiple configurations.
 *   Default save directory management with per-config overrides.
 *   Opt-in/out persistence for configurations (memory-only or file-backed).
 *   Support for JSON (default), YAML, and TOML file formats.
-*   Path-based deep access for getting and setting nested configuration values.
-*   Automatic validation and (optional) auto-saving on value changes.
+*   Path-based deep access (`get_value`, `set_value`) for configuration values.
+*   Attribute-based access (`config_instance.active.path.to.value`) for *reading* values with full type hinting. Setting values with full pre-processing and auto-save pipeline is done via `set_value`.
+*   Automatic validation and (optional) auto-saving on value changes made through `set_value`.
 *   Restore functionality for individual values or entire configurations to defaults or file-persisted state.
 *   `attach_auto_fix` decorator for Pydantic models to enable input pre-processing:
-    *   Numeric clamping/rejection based on `ge/gt/le/lt`.
-    *   `multiple_of` enforcement (rounding or rejection).
-    *   String snapping to nearest option for fields with predefined choices.
-    *   `min_length`/`max_length` enforcement (rejection).
-    *   Methods to try fitting other field formats, such as range(s), multiple choice, a combination of format requirements.
-    *   Safe evaluation of mathematical string expressions for numeric fields.
-    *   Configurable policies (`CLAMP`, `NEAREST`, `REJECT`, `BYPASS`) for numeric and options fixing, configurable globally or per-field.
-*   Access to Pydantic field metadata, including constraints and `json_schema_extra` for UI hints.
+    *   **Numeric fields:** Clamping/rejection based on `ge/gt/le/lt`, `multiple_of` enforcement (rounding or rejection). Safe evaluation of mathematical string expressions.
+    *   **Options fields (single choice):** Snapping to nearest option or rejection.
+    *   **String fields:** `min_length`/`max_length` pre-check (rejection if policy dictates).
+    *   **Advanced Formats:**
+        *   **Ranges (`Tuple[N,N]`):** Validation of bounds, item types, optional clamping.
+        *   **Multiple Choice (`List[T]` from options):** Validation of selected items against options, count limits.
+        *   **List Conversion (e.g., CSV string to `List[int]`):** Pre-processing of string inputs into typed lists.
+    *   Configurable policies (e.g., `CLAMP`, `NEAREST`, `REJECT`, `BYPASS`, and format-specific policies) for fixing behaviors, configurable globally via decorator or per-field.
+*   Handles `None` as a valid value if permitted by the field's type annotation (`Optional[T]`, `Union[T, None]`).
+*   Access to Pydantic field metadata, including constraints and structured `json_schema_extra` for UI hints, format specifications, and `autofix` settings.
 
 ## 2. System Architecture
 
@@ -39,63 +42,106 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
 |  User Application | -----------------> |   ConfigManager   |
 |                   | <----------------- |    (Singleton)    |
 | - Defines Models  |   Access Configs   +-------------------+
-| - Uses Configs    |                            | Manages
-+-------------------+                            |
+|(using BaseSettings|                            | Manages
+| or DynamicBaseSet)|                            |
++-------------------+                            V
          | Uses                                  |
          V                                       V
 +-------------------+      Loads/Saves      +-----------------+
 |  ConfigInstance   | --------------------> |   Filesystem    |
 | (Wraps Pydantic   |                       | (JSON/YAML/TOML)|
-|  BaseSettings)    |                       +-----------------+
+|  Model)           |                       +-----------------+
 +-------------------+
-         | Uses (on value set via new_inst = ModelCls(**data))
+         | Modifies via set_value()
+         | Instantiates / Validates
          V
 +-------------------+      Decorates
 | Pydantic Model    | <------------------+
-| (BaseSettings)    |                    |
-|                   |   +---------------------+
-| - Fields          |   | attach_auto_fix     |
-| - Validators      |   | (model_validator)   |
-+-------------------+   +---------------------+
+| (BaseSettings or  |                    |
+|  DynamicBaseSet.) |   +---------------------+
+|                   |   | attach_auto_fix     |
+| - Fields (Fields  |   | (model_validator)   |
+|   or ConfigFields)|   +---------------------+
+| - Validators      |
++-------------------+
 ```
 
 ### 2.2. Main Components
-*   **2.2.1. Pydantic `BaseSettings` Models (User-defined):** The core structure for defining configurations.
-*   **2.2.2. `ConfigManager` (Singleton):** Global registry and service provider for configurations.
+*   **2.2.1. Pydantic Configuration Models (User-defined):** Core structure. Can be plain `BaseSettings` or the enhanced `DynamicBaseSettings`.
+*   **2.2.2. `ConfigManager` (Singleton):** Global registry and service provider.
 *   **2.2.3. `ConfigInstance` (Managed configuration object):** Represents and manages a single, typed configuration.
-*   **2.2.4. Validation Subsystem (`attach_auto_fix` and helpers):** Provides pre-processing logic for input values before Pydantic's standard validation.
+*   **2.2.4. Validation Subsystem (`attach_auto_fix` and helpers):** Provides pre-processing logic.
+*   **2.2.5. (Optional) `DynamicBaseSettings` and `ConfigField`:** Convenience tools for defining models.
 
 ## 3. Component Deep Dive
 
-### 3.1. Pydantic Configuration Models
-*   **3.1.1. Definition:** Users define their configurations by creating classes that inherit from `dynamic_config_manager.BaseSettings` (which is re-exported from `pydantic_settings.BaseSettings`).
-    ```python
-    from dynamic_config_manager import BaseSettings, Field
-
-    class MyConfig(BaseSettings):
-        port: int = Field(8000, ge=1024, le=65535)
-        host: str = "localhost"
-        feature_flags: Dict[str, bool] = Field(default_factory=dict)
+### 3.1. Pydantic Configuration Models & `DynamicBaseSettings`
+*   **3.1.1. Definition:** Users define configurations by inheriting from `dynamic_config_manager.BaseSettings` or the recommended `dynamic_config_manager.DynamicBaseSettings`.
+*   **3.1.2. `DynamicBaseSettings(BaseSettings)`:**
+    *   An optional base class that may provide common `model_config` or helper methods in the future. Primarily serves as a clear entry point for using `ConfigField`.
+*   **3.1.3. `ConfigField(...)` function:**
+    *   A wrapper around Pydantic's `Field` to simplify setting `json_schema_extra` with structured keys for `dynamic-config-manager` features.
+    *   **Signature (Conceptual):**
+        ```python
+        def ConfigField(
+            default: Any = PydanticUndefined,
+            *,
+            # All standard pydantic.Field arguments (description, ge, le, etc.)
+            # ...
+            # dynamic-config-manager specific arguments:
+            ui_hint: Optional[str] = None,
+            ui_extra: Optional[Dict[str, Any]] = None, # e.g., {"step": 1, "editable": False}
+            options: Optional[List[Any]] = None, # For single-choice or as source for multiple-choice
+            autofix_settings: Optional[Dict[str, Union[str, Enum, bool]]] = None, # Per-field override for attach_auto_fix policies
+            format_spec: Optional[Dict[str, Any]] = None, # Defines advanced format and its options
+            **extra_json_schema_extra: Any,
+        ) -> Any: # Returns a Pydantic FieldInfo object
+        ```
+    *   Internally, `ConfigField` constructs the `json_schema_extra` dictionary with keys like `"ui_hint"`, `"ui_extra"`, `"options"`, `"autofix"`, `"format_spec"`.
+*   **3.1.4. Structure of `json_schema_extra` (when using `ConfigField` or manually structured):**
+    ```json
+    {
+      "ui_hint": "Slider", // E.g., "SpinBox", "ComboBox", "FilePath"
+      "ui_extra": {"step": 10, "editable": true, "min_val": 0, "max_val": 100}, // Arbitrary UI data
+      "options": ["alpha", "beta", "gamma"], // For single-choice or basis for multi-choice
+      "autofix": { // Per-field overrides for attach_auto_fix policies
+        "numeric_policy": "clamp", // or "reject", "bypass"
+        "options_policy": "nearest", // or "reject", "bypass"
+        "eval_expressions": true, // bool
+        "range_policy": "clamp_items", // specific to "range" format_type
+        "multiple_choice_policy": "remove_invalid", // specific to "multiple_choice"
+        "list_conversion_policy": "convert_or_reject" // specific to list conversion formats
+      },
+      "format_spec": { // Defines advanced field formats and their specific options
+        "type": "range", // E.g., "multiple_choice", "csv_to_list_int", "datetime_string"
+        // Options specific to "type":
+        // For "range" (expects field annotation like Tuple[int,int]):
+        "item_type": "int", // or "float"
+        "min_item_value": 0, // Optional constraint for items in range
+        "max_item_value": 100, // Optional constraint for items in range
+        "allow_single_value_as_range": false, // If true, input `5` becomes `(5,5)`
+        // For "multiple_choice" (expects field annotation like List[str]):
+        "min_selections": 0,
+        "max_selections": 3,
+        // For "csv_to_list_int" (expects List[int]):
+        "separator": ",",
+        "item_numeric_policy": "clamp", // Policy for individual items if they are numeric
+        "item_ge": 0, "item_le": 10 // Constraints for converted list items
+      }
+    }
     ```
-*   **3.1.2. Using `Field`:** Pydantic's `Field` is used for specifying default values, validation constraints (e.g., `ge`, `le`, `min_length`, `max_length`, `pattern`), and `json_schema_extra`.
-*   **3.1.3. Role of `json_schema_extra`:**
-    *   **UI Hints:** e.g., `{"ui": "SpinBox", "step": 100}`.
-    *   **Options:** e.g., `{"options": ["flat", "ball", "vbit"]}` for string fields, used by `attach_auto_fix`.
-    *   **Editability:** e.g., `{"editable": False}` to prevent modification via `ConfigInstance.set_value()`.
-    *   **Per-field `attach_auto_fix` settings:** e.g., `{"autofix": {"numeric_policy": "bypass", "eval_expressions": True}}`.
+*   **3.1.5. Using Pydantic `Field` Directly:** Users can still use `pydantic.Field` and manually structure `json_schema_extra` as above if not using `ConfigField`. The system will read from these keys.
 
 ### 3.2. `ConfigManager` Singleton
-*Instance available as `from dynamic_config_manager import ConfigManager`.*
-
-*   **3.2.1. Purpose and Singleton Nature:** A globally accessible singleton instance of `_ConfigManagerInternal` that manages all registered `ConfigInstance` objects, provides a default save directory, and facilitates bulk operations.
-*   **3.2.2. Properties:**
+*   **Purpose and Singleton Nature:** A globally accessible singleton instance of `_ConfigManagerInternal` that manages all registered `ConfigInstance` objects, provides a default save directory, and facilitates bulk operations.
+*   **Properties:**
     *   `default_dir: Path`
         *   **Getter:** Returns the current application-wide default directory for configuration files.
         *   **Setter:** Sets the default directory. Accepts `str`, `os.PathLike`, or `None`.
             *   If `None`, a new unique temporary directory is created (e.g., `tempfile.mkdtemp(prefix="dyn_cfg_mgr_")`).
             *   Otherwise, the provided path is expanded, resolved, and created if it doesn't exist.
         *   **Default:** `Path(tempfile.gettempdir()) / "dynamic_config_manager"`. This directory is created upon `ConfigManager`'s first instantiation.
-*   **3.2.3. Methods:**
+*   **Methods:**
     *   `register(name: str, model_cls: Type[T], *, save_path: Optional[Union[str, os.PathLike]] = None, auto_save: bool = False, persistent: bool = True) -> ConfigInstance[T]` (where `T` is a `BaseSettings` subclass)
         *   Registers a new configuration model with the manager.
         *   `name`: Unique identifier for this configuration. Raises `ValueError` if name is already registered.
@@ -108,21 +154,19 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
     *   `__iter__() -> Iterator[ConfigInstance]`: Iterates over all registered `ConfigInstance` objects.
     *   `save_all()`: Calls `persist()` on all registered, persistent `ConfigInstance` objects.
     *   `restore_all_defaults()`: Calls `restore_defaults()` on all registered `ConfigInstance` objects.
-*   **3.2.4. Internal State (`_ConfigManagerInternal` class):**
+*   **Internal State (`_ConfigManagerInternal` class):**
     *   `_instances: Dict[str, ConfigInstance]`
     *   `_default_dir: Path`
 
 ### 3.3. `ConfigInstance`
-*Returned by `ConfigManager.register()`.*
-
-*   **3.3.1. Purpose:** A wrapper around a Pydantic `BaseSettings` model instance, providing controlled access, persistence, and lifecycle management for a single configuration.
-*   **3.3.2. Initialization (internal, via `ConfigManager.register`):**
+*   **Purpose:** A wrapper around a Pydantic `BaseSettings` model instance, providing controlled access, persistence, and lifecycle management for a single configuration.
+*   **Initialization (internal, via `ConfigManager.register`):**
     *   `name: str`
     *   `model_cls: Type[T]` (where `T` is a `BaseSettings` subclass)
     *   `save_path: Optional[Path]` (fully resolved path or `None`)
     *   `auto_save: bool`
     *   `persistent: bool`
-*   **3.3.3. Internal State:**
+*   **Internal State:**
     *   `name: str`
     *   `_model_cls: Type[T]`
     *   `_defaults: T` (An instance of `model_cls` initialized with its default values, created via `model_cls()`).
@@ -130,9 +174,12 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
     *   `_save_path: Optional[Path]`
     *   `_auto_save: bool` (effective auto_save: `auto_save_param and persistent_param`)
     *   `_persistent: bool`
-*   **3.3.4. Properties:**
-    *   `active: T` (Read-only property): Returns a reference to the `_active` Pydantic model instance. Direct mutation of this instance bypasses `set_value`'s auto-save and `attach_auto_fix` pre-processing logic that runs on full model re-instantiation. Use `set_value` for modifications to ensure all hooks run.
-*   **3.3.5. Value Manipulation:**
+*   **Properties:**
+    *   `active: T` (Read-only property): Returns a reference to the `_active` Pydantic model instance.
+        *   **Important Note on Access:**
+            *   **For Reading:** Direct attribute access like `val = config_instance.active.path.to.nested_value` is supported and provides full type hinting via Pylance/LSP.
+            *   **For Setting:** To ensure the full `attach_auto_fix` pre-processing, Pydantic validation, and `auto_save` mechanisms are triggered, modifications **must** be made through `config_instance.set_value("path/to/value", new_value)`. Direct assignment (e.g., `config_instance.active.some_field = val`) will modify the Pydantic model in place, triggering only Pydantic's native field validators, bypassing the `attach_auto_fix` `model_validator` and `ConfigInstance`'s auto-save logic for that specific assignment.
+*   **Value Manipulation:**
     *   `get_value(path: str) -> Any`:
         *   Retrieves a value from the `_active` model using a path string (e.g., `"foo/bar/0/baz"`).
         *   Uses `_deep_get` helper for traversal.
@@ -143,11 +190,11 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
         *   Creates a new model instance: `self._active = self._model_cls(**new_model_dict)`. This step triggers Pydantic validation, including any `attach_auto_fix` `model_validator`.
         *   If Pydantic validation fails, raises `ValueError` wrapping the `ValidationError`.
         *   If successful and `self._auto_save` is `True`, calls `self.persist()`.
-*   **3.3.6. Metadata:**
+*   **Metadata:**
     *   `get_metadata(path: str) -> Dict[str, Any]`:
         *   Retrieves metadata for a field specified by a path string.
-        *   Returns a dictionary including: `type` (annotation), `required`, `default`, `editable` (from `json_schema_extra`, defaults to `True`), Pydantic constraints (`ge`, `le`, etc.), and any other `json_schema_extra` content.
-*   **3.3.7. Persistence:**
+        *   Returns a dictionary including: `type` (annotation), `required`, `default`, `editable` (from `json_schema_extra`, defaults to `True`), Pydantic constraints (`ge`, `le`, etc.), and any other `json_schema_extra` content (including `ui_hint`, `ui_extra`, `options`, `autofix` settings, `format_spec`).
+*   **Persistence:**
     *   `persist(file_format: Optional[str]=None) -> bool` (alias: `save`):
         *   Saves the `_active.model_dump(mode="json")` to `_save_path`.
         *   If `_save_path` is `None` (non-persistent config), logs a debug message and returns `False`.
@@ -162,7 +209,7 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
         *   If `_save_path` exists and is a file, loads data from it.
         *   Instantiates `_model_cls` with the loaded data.
         *   If loading or validation fails, logs a warning and returns `None` (leading to use of defaults).
-*   **3.3.8. Restore Operations:**
+*   **Restore Operations:**
     *   `restore_value(path: str, source: str = "default")`: # source: Literal["default", "file"]
         *   Restores a single value at `path` to its state from the specified `source`.
         *   `source="default"`: Uses value from `_defaults`.
@@ -176,89 +223,67 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
 *Provides the `attach_auto_fix` decorator and helper functions for input pre-processing.*
 
 *   **3.4.1. `attach_auto_fix` Decorator**
-    *   **Signature:** `attach_auto_fix(_cls: Optional[Type[BaseModel]] = None, *, numeric_policy: Union[str, NumericPolicy] = NumericPolicy.CLAMP, options_policy: Union[str, OptionsPolicy] = OptionsPolicy.NEAREST, eval_expressions: bool = False)`
-    *   **Application:**
+    *   **Signature (Conceptual - actual policy types will be Enums):**
         ```python
-        from dynamic_config_manager import attach_auto_fix, BaseSettings, Field
-
-        @attach_auto_fix() # Uses default policies
-        class MyConfig(BaseSettings):
-            speed: int = Field(100, ge=0, le=200)
-
-        @attach_auto_fix(numeric_policy="reject", eval_expressions=True)
-        class AnotherConfig(BaseSettings):
-            offset: float = Field(0.0, multiple_of=0.5)
-            # Per-field override
-            mode: str = Field("auto", json_schema_extra={
-                "options": ["auto", "manual", "off"],
-                "autofix": {"options_policy": "bypass"} # Field-specific policy
-            })
+        def attach_auto_fix(
+            _cls: Optional[Type[BaseModel]] = None,
+            *,
+            numeric_policy: str = "clamp",
+            options_policy: str = "nearest", # For single-choice string options
+            eval_expressions: bool = False,
+            # Default policies for new formats:
+            range_policy: str = "reject_if_invalid", # e.g. "clamp_items"
+            multiple_choice_policy: str = "remove_invalid", # e.g. "reject_if_any_invalid"
+            list_conversion_policy: str = "convert_or_reject", # e.g. "convert_best_effort"
+            # General fallback behavior for unhandled types or generic issues:
+            default_string_policy: str = "bypass", # e.g. strip, lower (if generic string ops added)
+        )
         ```
-    *   **Mechanism:** Attaches a Pydantic `model_validator(mode="before")` to the decorated class. This validator (`_auto` internal function) runs before Pydantic's standard field and model validation.
-    *   **Per-field Override:** The model validator checks each field's `FieldInfo.json_schema_extra`. If `json_schema_extra` is a dictionary and contains an `"autofix"` key, its value (expected to be a dictionary) is used to override the global `attach_auto_fix` settings for that specific field (e.g., `{"autofix": {"numeric_policy": "reject"}}`).
+    *   **Mechanism:** Attaches a Pydantic `model_validator(mode="before")` to the decorated class.
+    *   **Per-field Override:** The model validator checks `field_info.json_schema_extra.get("autofix", {})` for overrides to these global policies.
 *   **3.4.2. Policies (Enums):**
-    *   `NumericPolicy(str, Enum)`:
-        *   `CLAMP`: (Default) Clamps numeric values to `ge/le` bounds. Rounds to `multiple_of` if specified.
-        *   `REJECT`: If value is outside `ge/le` or not a multiple of `multiple_of`, the original unprocessed value for the field is passed to Pydantic (which will likely raise a `ValidationError`).
-        *   `BYPASS`: Skips numeric auto-fixing for the field. The original value is passed to Pydantic.
-    *   `OptionsPolicy(str, Enum)`:
-        *   `NEAREST`: (Default) If string value is not in `json_schema_extra["options"]`, attempts to find the closest match. If no suitable match, original value is passed to Pydantic.
-        *   `REJECT`: If value is not in `options`, original value is passed to Pydantic.
-        *   `BYPASS`: Skips options auto-fixing. Original value is passed to Pydantic.
+    *   `NumericPolicy(str, Enum)`: `CLAMP`, `REJECT`, `BYPASS`.
+    *   `OptionsPolicy(str, Enum)`: `NEAREST`, `REJECT`, `BYPASS` (for single string option matching).
+    *   **New Policies (Examples - to be defined):**
+        *   `RangePolicy(str, Enum)`: `CLAMP_ITEMS` (clamp items to `item_min/max_value` if specified in `format_spec`), `REJECT_IF_INVALID_STRUCTURE`, `REJECT_IF_ITEMS_INVALID`, `SWAP_IF_MIN_GT_MAX_AND_VALID`.
+        *   `MultipleChoicePolicy(str, Enum)`: `REMOVE_INVALID_CHOICES` (keep valid ones), `REJECT_IF_ANY_INVALID`, `REJECT_IF_COUNT_INVALID` (violates `min/max_selections`).
+        *   `ListConversionPolicy(str, Enum)`: `CONVERT_OR_REJECT` (entire field rejected if any item fails conversion/validation), `CONVERT_BEST_EFFORT` (convert valid items, discard/replace invalid ones based on sub-policy).
+    *   All policy sets should include `REJECT` and `BYPASS` variants.
 *   **3.4.3. Core Logic (The `model_validator` function injected by `attach_auto_fix`):**
-    *   Receives the raw input data dictionary.
-    *   Creates a mutable copy `fixed_data = dict(raw_data)`.
-    *   Iterates through fields defined in the model (`cls.model_fields.items()`).
-    *   For each field present in `raw_data`:
-        1.  Determines the effective `autofix` policies: starts with global policies from decorator, then overrides with field-specific settings from `field_info.json_schema_extra.get("autofix", {})`.
-        2.  Retrieves `original_value = raw_data[name]`.
-        3.  Applies numeric fixing logic if applicable (field type is numeric or constraints like `ge`, `multiple_of` are present):
-            *   Calls internal helper `_run_numeric_autofix(original_value, field_info, effective_numeric_policy, effective_eval_expressions, constraints)`.
-            *   This helper performs expression evaluation, type coercion, and policy enforcement. It returns the processed value, or `original_value` if rejected/bypassed/failed.
-        4.  Applies options fixing logic if `json_schema_extra["options"]` are present:
-            *   Calls internal helper `_run_options_autofix(current_value_from_step3, field_info, effective_options_policy, options_list)`.
-            *   This helper performs matching and policy enforcement. It returns the processed value, or `current_value_from_step3` if rejected/bypassed/failed.
-        5.  Applies length constraint checks (`min_length`, `max_length`) if applicable:
-            *   If value's length is outside bounds, and policy implies rejection (e.g., tied to `REJECT` `numeric_policy`, or a hardcoded reject for length), the value from the previous step is kept (effectively passing the problematic value to Pydantic). This is "REJECT only" for length constraints as per current implementation.
-        6.  Updates `fixed_data[name]` with the final processed value from these steps.
-    *   Returns `fixed_data` to Pydantic for standard validation.
-*   **3.4.4. `_run_numeric_autofix` (Conceptual private helper):**
-    *   **Input:** `original_value`, `field_info`, `numeric_policy`, `eval_allowed`, `constraints` (derived from `field_info`).
-    *   **Output:** `processed_value` (which might be `original_value`).
-    *   **Steps:**
-        1.  `current_val = original_value`.
-        2.  **Expression Evaluation:** If `eval_allowed` and `current_val` is a string, call `_safe_eval(current_val, names={"v": current_val, "x": current_val, "min": ge_val, "max": le_val})`. If successful, `current_val` becomes the evaluated number. If `_safe_eval` returns `None` (error), `current_val` remains the original string.
-        3.  **Type Coercion:** Attempt to coerce `current_val` to the field's annotation type (e.g., `int`, `float`) using `field_info.annotation(current_val)`. If coercion fails (raises exception):
-            *   Return `original_value`. (Pydantic will then handle the type error).
-        4.  Let coerced value be `coerced_val`.
-        5.  **Policy Application:**
-            *   If `numeric_policy == NumericPolicy.BYPASS`: Return `coerced_val`.
-            *   Check `ge/gt/le/lt` constraints against `coerced_val`.
-            *   Check `multiple_of` constraint against `coerced_val`.
-            *   If `numeric_policy == NumericPolicy.CLAMP`:
-                *   If `coerced_val` violates `ge/le`, clamp it.
-                *   If `multiple_of` is set and clamped value is not a multiple, round it to the nearest multiple.
-                *   Return the clamped/rounded value.
-            *   If `numeric_policy == NumericPolicy.REJECT`:
-                *   If `coerced_val` violates `ge/le` or `multiple_of`, return `original_value`.
-                *   Otherwise, return `coerced_val`.
-        6.  Return `coerced_val` (if no early return).
-*   **3.4.5. `_run_options_autofix` (Conceptual private helper):**
-    *   **Input:** `original_value`, `field_info`, `options_policy`, `options_list` (from `json_schema_extra`).
-    *   **Output:** `processed_value` (which might be `original_value`).
-    *   **Steps:**
-        1.  If `original_value` is already in `options_list`, return `original_value`.
-        2.  If `options_policy == OptionsPolicy.BYPASS`: Return `original_value`.
-        3.  If `options_policy == OptionsPolicy.NEAREST`:
-            *   If `original_value` is a string, use `difflib.get_close_matches(original_value, [str(o) for o in options_list], n=1, cutoff=0.3)`.
-            *   If a match is found, convert it back to the type of the option in `options_list` (if options are not all strings) and return it.
-            *   If no match, return `original_value`.
-        4.  If `options_policy == OptionsPolicy.REJECT`: Return `original_value` (as it's not in `options_list`).
-        5.  Return `original_value` (default fallback).
-*   **3.4.6. Length Constraint Handling (within main model validator loop):**
-    *   Applies to string/list/dict fields with `min_length` or `max_length`.
-    *   This is a "REJECT-only" mechanism. If the length of the (potentially already processed by numeric/options fixers) value violates these constraints, the value is *not modified further by this check*. Pydantic will then validate this value against `min_length`/`max_length` and raise an error if it fails. This ensures the original problematic value (or auto-fixed value that is still too long/short) is seen by Pydantic.
-*   **3.4.7. `_safe_eval(expr: str, names: dict[str, Any]) -> Optional[Union[float, int]]`**
+    *   Receives `raw_data_dict` (input to the model).
+    *   Creates `fixed_data = {}`.
+    *   Iterates `name, field_info` in `cls.model_fields.items()`:
+        1.  `original_value = raw_data_dict.get(name, PydanticUndefined)` (Handle cases where field might not be in input, relying on Pydantic defaults).
+        2.  If `original_value is PydanticUndefined` and field has a default or is `Optional`, skip `autofix` for this field unless specific policy dictates otherwise (e.g. "process_defaults"). Generally, `autofix` acts on provided input.
+        3.  Determine `effective_autofix_policies` and `format_spec` from global decorator args and `field_info.json_schema_extra`.
+        4.  `processed_value = original_value`.
+        5.  **Handle `None`:** If `original_value is None` and `field_info.annotation` permits `None` (e.g., `Optional[T]`, `Union[T, None]`), `processed_value` remains `None` and most subsequent auto-fixing steps are bypassed for this value, unless a specific policy targets `None` values (e.g., "replace_none_with_default_if_not_optional").
+        6.  **Dispatch based on `format_spec.get("type")` or field type:**
+            *   If `format_spec.type == "range"`: `processed_value = _run_range_autofix(processed_value, policies, format_spec, field_info)`.
+            *   If `format_spec.type == "multiple_choice"`: `processed_value = _run_multichoice_autofix(...)`.
+            *   If `format_spec.type == "csv_to_list_int"` (example): `processed_value = _run_list_conversion_autofix(...)`.
+            *   **Else (no specific format_spec or it's a basic type):**
+                *   **Numeric Processing:** If field appears numeric (based on annotation or constraints like `ge`/`le`/`multiple_of`):
+                    *   Apply expression evaluation if `eval_expressions` is true and `processed_value` is a string. Update `processed_value` with result or keep original string if eval fails.
+                    *   Attempt coercion of `processed_value` to the target numeric type (derived from `field_info.annotation`).
+                    *   Apply `NumericPolicy` (clamp/reject/bypass) using `ge/le/multiple_of` constraints from `field_info.metadata`.
+                *   **Options Processing (single choice):** If `options` are in `json_schema_extra` (and not handled by `multiple_choice` format):
+                    *   Apply `OptionsPolicy` (nearest/reject/bypass).
+                *   **String Length Processing:** If `processed_value` is a string and `min_length`/`max_length` are defined:
+                    *   Apply policy (effectively "REJECT" if `NumericPolicy` (reused for this) is `REJECT` and length constraint violated, otherwise Pydantic handles it).
+        7.  **Result Handling from Fixers:** Each `_run_..._autofix` helper should return a tuple: `(status: FixStatusEnum, value: Any)`.
+            *   `FixStatusEnum`: `PROCESSED_MODIFIED`, `PROCESSED_UNMODIFIED` (valid as-is), `BYPASSED`, `REJECTED_BY_POLICY`, `FAILED_PREPROCESSING`.
+            *   If status is `REJECTED_BY_POLICY` or `FAILED_PREPROCESSING`, then `fixed_data[name] = original_value` (pass the raw input for this field to Pydantic).
+            *   Otherwise, `fixed_data[name] = value` (the processed or bypassed value).
+    *   Fields from `raw_data_dict` not defined in the model are passed through (Pydantic will handle them, e.g., `model_extra='ignore'/'forbid'`).
+    *   Returns `fixed_data` to Pydantic.
+*   **3.4.4. Specific Auto-Fix Helper Functions (Conceptual):**
+    *   `_run_numeric_autofix(...)`: Includes `_safe_eval`. Handles `None` inputs gracefully if field is `Optional`.
+    *   `_run_options_autofix(...)`: For single string choice.
+    *   `_run_range_autofix(...)`: Validates tuple/list structure, item types, bounds, applies `RangePolicy`.
+    *   `_run_multichoice_autofix(...)`: Validates against `options`, selection counts, applies `MultipleChoicePolicy`.
+    *   `_run_list_conversion_autofix(...)`: Parses input (e.g., CSV string), converts items, validates items, applies `ListConversionPolicy`.
+*   **3.4.5. `_safe_eval(expr: str, names: dict[str, Any]) -> Optional[Union[float, int]]`**
     *   Safely evaluates arithmetic expressions.
     *   Replaces `^` with `**`.
     *   Allowed variables in `names`: `v`, `x` (current value being evaluated, typically passed by caller), `min`, `max` (bounds of the field, if numeric).
@@ -267,6 +292,11 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
     *   Allowed AST nodes: `Num`, `Name` (for allowed vars/consts), `BinOp` (for `+,-,*,/,**, %`), `UnaryOp` (`+`,`-`), `Call` (for allowed functions).
     *   Shorthand: If `expr` starts with `+,-,*,/` (e.g., `"/2"`), it's interpreted as `f"v{expr}"`.
     *   Returns the numeric result, or `None` if parsing/evaluation fails due to disallowed operations or syntax errors.
+*   **3.4.6. Handling `Union` Types:**
+    *   `attach_auto_fix` pre-processes the input value based on its apparent type and the configured rules (e.g., if it's a string and `eval_expressions` is on, it's evaluated).
+    *   The (potentially) modified value is then passed to Pydantic.
+    *   Pydantic's standard `Union` validation logic then attempts to match the value against each member of the `Union` in the order they are defined.
+    *   `dynamic-config-manager` does not attempt to apply different `autofix` rules for different members of a `Union` field during its pre-processing pass. The constraints defined on the `Union` members themselves (e.g., `Union[PositiveInt, constr(min_length=5)]`) are handled by Pydantic after `attach_auto_fix`.
 
 ## 4. File I/O
 
@@ -291,9 +321,9 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
 5.  `config_instance._active = config_instance._model_cls(**raw_data_dict)` is called. This triggers full Pydantic model instantiation.
     *   **5.a. `attach_auto_fix` Pre-processing:** The `model_validator(mode="before")` (defined by `attach_auto_fix`) runs first.
         *   It iterates through fields in `raw_data_dict`.
-        *   Applies expression evaluation, numeric fixing (clamping/rejection/bypass), options fixing (nearest/rejection/bypass), and length checks according to effective policies (global + per-field overrides).
-        *   If a fixer (e.g., `_run_numeric_autofix`) determines a value should be rejected or cannot be processed, it returns the original value it received for that field. Otherwise, it returns the modified value.
-        *   The `model_validator` constructs a `fixed_data_dict` where each value is the result from its respective auto-fix processing.
+        *   Applies expression evaluation, numeric fixing (clamping/rejection/bypass), options fixing (nearest/rejection/bypass), advanced format processing (range, multiple_choice, list_conversion), and length checks according to effective policies (global + per-field overrides).
+        *   If a fixer (e.g., `_run_numeric_autofix`) determines a value should be rejected or cannot be processed (returns status `REJECTED_BY_POLICY` or `FAILED_PREPROCESSING`), it passes the original input value for that field to Pydantic. Otherwise, it passes the (potentially) modified value.
+        *   The `model_validator` constructs a `fixed_data_dict` where each value is the result from its respective auto-fix processing (or the original value if fixing was rejected/failed).
         *   This `fixed_data_dict` is returned to Pydantic.
     *   **5.b. Pydantic Standard Validation:** Pydantic processes `fixed_data_dict`.
         *   Performs type coercion/validation for each field.
@@ -307,8 +337,11 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
 The `dynamic_config_manager/__init__.py` should expose:
 *   `ConfigManager` (the singleton instance)
 *   `BaseSettings` (re-export from `pydantic_settings`)
+*   `DynamicBaseSettings` (new custom base class)
+*   `ConfigField` (new field constructor function)
 *   `BaseModel`, `Field`, `ValidationError` (re-exports from `pydantic`)
 *   `attach_auto_fix` (from `dynamic_config_manager.validation`)
+*   Policy Enums (e.g., `NumericPolicy`, `OptionsPolicy`, `RangePolicy`, `MultipleChoicePolicy`, `ListConversionPolicy`, `FixStatusEnum`)
 *   `__version__`
 
 ## 7. Error Handling Strategy
@@ -324,8 +357,8 @@ The `dynamic_config_manager/__init__.py` should expose:
 *   The library's root logger (`logging.getLogger("dynamic_config_manager")`) should have a `logging.NullHandler()` attached by default to prevent log messages if the application doesn't configure logging.
 *   **Log Events:**
     *   INFO: Config registration, successful save/export.
-    *   DEBUG: Memory-only config not persisted, auto-fix actions (optional, can be verbose).
-    *   WARNING: Failure to load config from disk (falling back to defaults), failure to save/export config, bad data format encountered.
+    *   DEBUG: Memory-only config not persisted, auto-fix actions and decisions (e.g., value modified from X to Y by policy Z for field F), expression evaluation results.
+    *   WARNING: Failure to load config from disk (falling back to defaults), failure to save/export config, bad data format encountered, auto-fix policy resulted in using original value due to pre-processing failure or rejection.
     *   ERROR: Critical internal errors (should be rare).
 
 ## 9. Dependencies and Installation
@@ -341,39 +374,79 @@ The `dynamic_config_manager/__init__.py` should expose:
     *   With extras: `pip install dynamic-config-manager[yaml,toml]`
     *   The `pyproject.toml` should define these extras.
 
-## 10. Quick Start / Usage Example (Illustrative)
+## 10. Quick Start / Usage Example (Illustrative - Updated)
 
 ```python
-from dynamic_config_manager import BaseSettings, Field, ConfigManager, attach_auto_fix
+from typing import Optional, Tuple, List
+from pydantic import PydanticUndefined # For ConfigField default
 
-# 1. Define your configuration model with auto-fix enabled
-@attach_auto_fix(numeric_policy="clamp", eval_expressions=True)
-class AppConfig(BaseSettings):
-    server_port: int = Field(8080, ge=1024, le=65535, json_schema_extra={"ui": "SpinBox"})
-    log_level: str = Field("INFO", json_schema_extra={"options": ["DEBUG", "INFO", "WARNING", "ERROR"]})
-    retry_attempts: int = Field(3, ge=0, le=5, json_schema_extra={"autofix": {"numeric_policy": "reject"}}) # Override global
-    feature_x_threshold: float = Field(0.5, ge=0, le=1.0)
+from dynamic_config_manager import (
+    DynamicBaseSettings, ConfigField, ConfigManager, attach_auto_fix,
+    NumericPolicy # Example policy enum
+)
 
-# 2. Set application-wide default config directory (optional, recommended)
-ConfigManager.default_dir = "~/.my_app/config" # Expands and creates directory
+# 1. Define your configuration model with auto-fix and new field types
+@attach_auto_fix(numeric_policy=NumericPolicy.CLAMP, eval_expressions=True)
+class AdvancedConfig(DynamicBaseSettings):
+    server_port: int = ConfigField(
+        default=8080, ge=1024, le=65535,
+        ui_hint="SpinBox"
+    )
+    log_level: str = ConfigField(
+        default="INFO",
+        options=["DEBUG", "INFO", "WARNING", "ERROR"], # For single choice
+        ui_hint="ComboBox"
+    )
+    processing_range: Tuple[int, int] = ConfigField(
+        default=(10, 90),
+        format_spec={
+            "type": "range",
+            "item_type": "int",
+            "min_item_value": 0,
+            "max_item_value": 100
+        },
+        autofix_settings={"range_policy": "clamp_items"} # clamp items within 0-100
+    )
+    selected_features: List[str] = ConfigField(
+        default_factory=list,
+        options=["feature_a", "feature_b", "feature_c", "feature_d"], # Source for multi-choice
+        format_spec={
+            "type": "multiple_choice",
+            "max_selections": 2
+        },
+        autofix_settings={"multiple_choice_policy": "remove_invalid"}
+    )
+    user_ids_input: List[int] = ConfigField( # Input might be "1,2, 3 , non_int, 5"
+        default_factory=list,
+        format_spec={
+            "type": "csv_to_list", # Assuming 'csv_to_list' handles item_type implicitly or configured
+            "item_type": "int",
+            "item_numeric_policy": "reject" # Reject non-int items
+        },
+        autofix_settings={"list_conversion_policy": "convert_best_effort"}
+    )
+    nullable_value: Optional[int] = ConfigField(default=None, ge=0)
+
+# 2. Set application-wide default config directory (optional)
+ConfigManager.default_dir = "~/.my_advanced_app/config"
 
 # 3. Register the configuration
-app_cfg_instance = ConfigManager.register("app_settings", AppConfig, auto_save=True)
+adv_cfg_instance = ConfigManager.register("advanced_settings", AdvancedConfig, auto_save=True)
 
-# Access the active configuration model (Pydantic instance)
-active_config = app_cfg_instance.active
-print(f"Initial Port: {active_config.server_port}") # -> 8080 (or loaded value)
+# Access active config for reading (with type hints)
+active_conf = adv_cfg_instance.active
+print(f"Current Port: {active_conf.server_port}")
+print(f"Nullable initially: {active_conf.nullable_value}") # -> None
 
-# 4. Set values (validation and auto-fix run automatically)
-try:
-    app_cfg_instance.set_value("server_port", "8000+100") # Uses eval_expressions -> 8100
-    app_cfg_instance.set_value("log_level", "debug") # Uses options_policy (nearest) -> "DEBUG"
-    app_cfg_instance.set_value("retry_attempts", 10) # numeric_policy="reject" for this field
-except ValueError as e:
-    print(f"Failed to set retry_attempts: {e}") # Pydantic validation error for retry_attempts > 5
-
-print(f"New Port: {app_cfg_instance.get_value('server_port')}") # -> 8100
-print(f"Log Level: {app_cfg_instance.get_value('log_level')}") # -> "DEBUG"
+# 4. Set values using set_value to trigger full pipeline
+adv_cfg_instance.set_value("server_port", "9000-100") # -> 8900 (eval)
+adv_cfg_instance.set_value("processing_range", (5, 105)) # -> (5, 100) (range_policy clamps item)
+adv_cfg_instance.set_value("selected_features", ["feature_a", "feature_x", "feature_b"]) # -> ["feature_a", "feature_b"]
+adv_cfg_instance.set_value("user_ids_input", "1, 2,bad,4") # -> [1, 2, 4] (best effort conversion)
+adv_cfg_instance.set_value("nullable_value", 10)
+print(f"Nullable now: {adv_cfg_instance.get_value('nullable_value')}") # -> 10
+adv_cfg_instance.set_value("nullable_value", None) # Setting back to None is fine
+print(f"Nullable again: {adv_cfg_instance.get_value('nullable_value')}") # -> None
 
 # 5. Restore defaults or individual values
 app_cfg_instance.restore_value("server_port", source="default")
@@ -393,3 +466,255 @@ app_cfg_instance.restore_value("server_port", source="default")
     If `data` is a Pydantic `BaseModel`, it performs `model_dump()`, sets the nested value in the dictionary, and returns a *new instance* of the model class initialized with the modified dictionary: `data.__class__(**copied_dict)`.
     If `data` is a `dict` or `list`, it returns a shallow copy with the nested value set.
     This ensures that modifications trigger Pydantic's re-validation when the `ConfigInstance` uses the result to update its `_active` model.
+
+## Appendix B: Field Formats and `autofix` Behavior
+
+This appendix details each supported `format_spec.type` and its associated `autofix` policies and `format_spec` options. The goal is to provide pre-processing for common complex input patterns before Pydantic's final validation.
+
+---
+
+### B.1. Numeric (Implicit)
+
+*   **Purpose:** Standard numeric value handling with optional expression evaluation and constraint enforcement.
+*   **Field Annotation:** `int`, `float`, `Decimal`, `Optional[int]`, etc.
+*   **`format_spec.type`:** Not explicitly set. Inferred if numeric Pydantic constraints (`ge`, `le`, `multiple_of`) or a numeric type annotation is present and no other `format_spec.type` is defined.
+*   **`format_spec.options`:** N/A (constraints come from Pydantic `Field` args like `ge`, `le`, `multiple_of`).
+*   **`autofix_settings`:**
+    *   `numeric_policy: NumericPolicy` (Default: `CLAMP`)
+        *   `CLAMP`: Clamps to `ge`/`le` bounds. If `multiple_of` is set, rounds to the nearest multiple within bounds.
+        *   `REJECT`: If outside `ge`/`le` or not a multiple of `multiple_of`, the original unprocessed value for the field is passed to Pydantic.
+        *   `BYPASS`: Skips numeric auto-fixing.
+    *   `eval_expressions: bool` (Default: `False`)
+        *   If `True` and input is a string, attempts `_safe_eval`.
+*   **Behavior:**
+    1.  If `eval_expressions` is `True` and input is a string, attempt safe evaluation.
+    2.  Attempt coercion to the field's numeric type.
+    3.  Apply `NumericPolicy` based on `ge`/`le`/`multiple_of` constraints.
+    4.  If field is `Optional` and input is `None`, `None` is preserved and processing stops here.
+
+---
+
+### B.2. Options (Single Choice String - Implicit)
+
+*   **Purpose:** Handling fields where the value must be one of a predefined set of string options.
+*   **Field Annotation:** `str`, `Optional[str]`, `Literal["opt1", "opt2"]`.
+*   **`format_spec.type`:** Not explicitly set. Inferred if `json_schema_extra.options: List[str]` is present and the field is typically `str`, and not handled by `multiple_choice` format.
+*   **`format_spec.options`:** N/A (options come from `json_schema_extra.options`).
+*   **`autofix_settings`:**
+    *   `options_policy: OptionsPolicy` (Default: `NEAREST`)
+        *   `NEAREST`: If input string is not in `options`, attempts `difflib.get_close_matches`. If a good match is found, it's used. Otherwise, original value.
+        *   `REJECT`: If input string is not in `options`, original value is passed.
+        *   `BYPASS`: Skips options auto-fixing.
+*   **Behavior:**
+    1.  If input is already in `options`, it's considered valid by this fixer.
+    2.  Apply `OptionsPolicy`.
+    3.  If field is `Optional` and input is `None`, `None` is preserved.
+
+---
+
+### B.3. Range
+
+*   **Purpose:** Representing a bounded interval with two numeric values (e.g., a min-max pair).
+*   **Field Annotation:** `Tuple[N, N]` (e.g., `Tuple[int, int]`, `Tuple[float, float]`).
+*   **`format_spec.type`:** `"range"`
+*   **`format_spec.options`:**
+    *   `item_type: Literal["int", "float"]` (Required): The numeric type of the range's start and end points.
+    *   `min_item_value: Optional[Union[int, float]]`: Global minimum constraint for both items in the range.
+    *   `max_item_value: Optional[Union[int, float]]`: Global maximum constraint for both items.
+    *   `item_multiple_of: Optional[Union[int, float]]`: `multiple_of` constraint for individual items.
+    *   `allow_single_value_as_range: bool` (Default: `False`): If `True`, an input like `5` becomes `(5,5)` (or `[5,5]`). If `False`, single value input is rejected by structure check.
+    *   `enforce_min_le_max: bool` (Default: `True`): If `True`, ensures `range[0] <= range[1]` after individual item processing.
+    *   `input_separator: Optional[str]` (Default: `None`): If provided (e.g. `"-"`, `","`), allows string input like "0-100" to be parsed into `(0, 100)`.
+*   **`autofix_settings`:**
+    *   `range_policy: RangePolicy` (Enum, e.g., `CLAMP_ITEMS`, `REJECT_IF_INVALID_STRUCTURE`, `REJECT_IF_ITEMS_INVALID`, `SWAP_IF_REVERSED_AND_VALID`, `BYPASS`)
+*   **Behavior:**
+    1.  **Input Parsing:**
+        *   If `input_separator` is defined and input is a string, attempt to split and parse into two numeric values.
+        *   If `allow_single_value_as_range` is `True` and input is a single number, convert to `(num, num)`.
+    2.  **Structure Validation:** Check if input is a 2-element list/tuple. If not, and not parsed successfully above, apply `REJECT_IF_INVALID_STRUCTURE` or pass.
+    3.  **Item Coercion & Validation:** For each item in the pair:
+        *   Coerce to `item_type`.
+        *   Apply `min_item_value`, `max_item_value`, `item_multiple_of` based on `range_policy` (e.g., clamp or reject individual items).
+    4.  **Order Enforcement:** If `enforce_min_le_max` is `True`:
+        *   If `range[0] > range[1]`:
+            *   If `range_policy` allows swapping (e.g., `SWAP_IF_REVERSED_AND_VALID`), swap them.
+            *   Otherwise, mark for rejection or pass original.
+    5.  Return the processed tuple or original value based on policy outcomes.
+    6.  Handles `Optional[Tuple[N,N]]` if input is `None`.
+
+---
+
+### B.4. Multiple Choice
+
+*   **Purpose:** Allowing selection of zero or more items from a predefined list of options.
+*   **Field Annotation:** `List[T]` (e.g., `List[str]`, `List[int]`). `T` should match type of items in `options`.
+*   **`json_schema_extra.options: List[T]`** (Required): The pool of available choices.
+*   **`format_spec.type`:** `"multiple_choice"`
+*   **`format_spec.options`:**
+    *   `min_selections: Optional[int]` (Default: 0).
+    *   `max_selections: Optional[int]` (Default: `len(options)`).
+    *   `allow_duplicates: bool` (Default: `False`): If `False`, duplicate selections are removed (first occurrence kept).
+    *   `input_separator: Optional[str]` (Default: `None`): If input is a string (e.g., "apple,banana"), use this to split it into a list of strings before matching against options. Item types in `options` must be string if this is used.
+*   **`autofix_settings`:**
+    *   `multiple_choice_policy: MultipleChoicePolicy` (Enum, e.g., `REMOVE_INVALID_CHOICES`, `REJECT_IF_ANY_INVALID`, `REJECT_IF_COUNT_INVALID`, `BYPASS`)
+*   **Behavior:**
+    1.  **Input Normalization:**
+        *   If `input_separator` is defined and input is a string, split it.
+        *   Ensure input is a list. If not (e.g. single item not in a list), wrap it if policy allows, or reject.
+    2.  **Item Validation & Filtering:**
+        *   If not `allow_duplicates`, make items unique.
+        *   Iterate through input items. Check if each item exists in `json_schema_extra.options`.
+        *   Apply `multiple_choice_policy`:
+            *   `REMOVE_INVALID_CHOICES`: Build a new list of only valid items.
+            *   `REJECT_IF_ANY_INVALID`: If any item is not in `options`, the entire input is marked for rejection.
+    3.  **Count Validation:** Check `min_selections` and `max_selections` against the count of valid selected items. If violated, apply policy (e.g., `REJECT_IF_COUNT_INVALID`).
+    4.  Return the processed list or original value.
+    5.  Handles `Optional[List[T]]` if input is `None`.
+
+---
+
+### B.5. List Conversion (Generic String/List to Typed List)
+
+*   **Purpose:** Converting a string (e.g., CSV) or a list of raw values into a list of a specific, validated type.
+*   **Field Annotation:** `List[T]` (e.g., `List[int]`, `List[float]`, `List[str]`, `List[bool]`).
+*   **`format_spec.type`:** E.g., `"string_to_list"`, `"list_to_typed_list"`. Could be one versatile `"list_conversion"` type.
+*   **`format_spec.options`:**
+    *   `input_is_string: bool` (Default: `False`): If `True`, expects string input that needs splitting.
+    *   `input_separator: str` (Default: `","`): Used if `input_is_string` is `True`.
+    *   `item_type: Literal["int", "float", "str", "bool"]` (Required): Target type for list items.
+    *   `strip_items: bool` (Default: `True`): Strip whitespace from split string items before coercion (if `input_is_string`).
+    *   **Item-level constraints (applied after coercion to `item_type`):**
+        *   If `item_type` is numeric: `item_ge`, `item_le`, `item_multiple_of`.
+        *   If `item_type` is string: `item_min_length`, `item_max_length`, `item_pattern`.
+        *   `item_options: Optional[List[Any]]` (For items that must be one of specified options).
+    *   `min_items: Optional[int]`: Minimum length of the resulting list.
+    *   `max_items: Optional[int]`: Maximum length of the resulting list.
+    *   `allow_duplicates: bool` (Default: `True`): If `False`, resulting list will have unique items.
+*   **`autofix_settings`:**
+    *   `list_conversion_policy: ListConversionPolicy` (Enum, e.g., `CONVERT_OR_REJECT`, `CONVERT_BEST_EFFORT`, `BYPASS`)
+    *   `item_numeric_policy: NumericPolicy` (If `item_type` is numeric, for `item_ge/le/multiple_of`).
+    *   `item_options_policy: OptionsPolicy` (If `item_options` are provided).
+*   **Behavior:**
+    1.  **Input Preparation:**
+        *   If `input_is_string` is `True`: Split string by `input_separator`. If `strip_items`, strip.
+        *   Ensure input is now a list.
+    2.  **Item Processing Loop:** For each item in the (potentially split) input list:
+        *   Coerce to `item_type`. If fails, handle based on `list_conversion_policy` (e.g., discard item for `CONVERT_BEST_EFFORT`, or mark entire list for rejection for `CONVERT_OR_REJECT`).
+        *   Apply item-level constraints (`item_ge/le`, `item_min_length`, `item_options`) using associated item-level policies. If an item fails its constraints, handle based on `list_conversion_policy`.
+    3.  **List-level Adjustments:**
+        *   If not `allow_duplicates`, make the list of successfully processed items unique.
+    4.  **List Length Validation:** Check `min_items`/`max_items` against the final processed list. If violated, handle per `list_conversion_policy`.
+    5.  Return the fully processed list or original value.
+    6.  Handles `Optional[List[T]]` if input is `None`.
+
+---
+
+### B.6. Datetime String
+
+*   **Purpose:** Parsing string inputs into `datetime.datetime`, `datetime.date`, or `datetime.time` objects, with format validation.
+*   **Field Annotation:** `datetime.datetime`, `datetime.date`, `datetime.time`, or `Optional` versions.
+*   **`format_spec.type`:** `"datetime_string"`
+*   **`format_spec.options`:**
+    *   `target_type: Literal["datetime", "date", "time"]` (Required, or inferred from field annotation).
+    *   `formats: List[str]` (Optional, e.g., `["%Y-%m-%d %H:%M:%S", "%Y/%m/%d"]`): List of `strptime` format codes to try. If not provided, tries common ISO formats or relies on Pydantic's default parsing.
+    *   `default_timezone: Optional[str]` (e.g., "UTC", "America/New_York"): If input string is naive, localize to this timezone. Requires `pytz` or `zoneinfo` (Python 3.9+).
+    *   `output_timezone: Optional[str]`: Convert parsed datetime to this timezone.
+    *   Constraints (applied after successful parsing):
+        *   `min_datetime: Optional[str | datetime]` (Parsable datetime string or datetime object).
+        *   `max_datetime: Optional[str | datetime]`.
+*   **`autofix_settings`:**
+    *   `datetime_policy: DatetimePolicy` (Enum, e.g., `PARSE_FIRST_SUCCESSFUL_FORMAT`, `REJECT_IF_NO_FORMAT_MATCHES`, `REJECT_IF_CONSTRAINTS_VIOLATED`, `CLAMP_TO_CONSTRAINTS` (if sensible), `BYPASS`)
+*   **Behavior:**
+    1.  If input is already a `datetime` object of the correct type, may apply constraints or bypass.
+    2.  If input is a string:
+        *   Try parsing with each format in `formats`. If `formats` is empty, use a default set of parsers (e.g., ISO).
+        *   If parsing succeeds:
+            *   Apply `default_timezone` if datetime is naive.
+            *   Apply `min_datetime`/`max_datetime` constraints based on `datetime_policy`.
+            *   Apply `output_timezone` conversion.
+            *   Return the `datetime` object.
+    3.  If parsing fails for all formats, or constraints are violated and policy is `REJECT`, mark for rejection.
+    4.  Handles `Optional` field if input is `None`.
+
+---
+
+### B.7. Multiple Ranges (List of Ranges)
+
+*   **Purpose:** Representing a list of range intervals.
+*   **Field Annotation:** `List[Tuple[N, N]]` (e.g., `List[Tuple[int, int]]`).
+*   **`format_spec.type`:** `"multiple_ranges"`
+*   **`format_spec.options`:**
+    *   All options from **B.3. Range** prefixed with `item_range_` (e.g., `item_range_item_type`, `item_range_min_item_value`, `item_range_enforce_min_le_max`).
+    *   `min_ranges: Optional[int]`: Minimum number of range tuples in the list.
+    *   `max_ranges: Optional[int]`: Maximum number of range tuples.
+    *   `allow_overlapping_ranges: bool` (Default: `True`). If `False`, validates that ranges in the list do not overlap.
+    *   `sort_ranges: bool` (Default: `False`): If `True`, sorts the list of ranges by their start points.
+    *   `input_separator_list: str` (Default: `;` or `|`): Separator for string input representing multiple ranges (e.g., "0-10;20-30").
+    *   `input_separator_range: str` (Default: `-`): Separator within each range string (passed to individual range parser).
+*   **`autofix_settings`:**
+    *   `multiple_ranges_policy: MultipleRangesPolicy` (Enum, e.g., `PROCESS_ITEMS_BEST_EFFORT`, `REJECT_IF_ANY_ITEM_INVALID`, `REJECT_IF_LIST_CONSTRAINTS_VIOLATED`, `BYPASS`)
+    *   `item_range_policy: RangePolicy` (Policy to apply to each individual range tuple, see B.3).
+*   **Behavior:**
+    1.  **Input Parsing:** If input is a string, split by `input_separator_list`. Each part is then parsed as an individual range (using `input_separator_range` and `item_range_*` options).
+    2.  **Individual Range Processing:** For each potential range in the list:
+        *   Apply the logic from **B.3. Range** using `item_range_*` options and `item_range_policy`.
+        *   Collect successfully processed ranges. Handle failures based on `multiple_ranges_policy`.
+    3.  **List-level Validation:**
+        *   Apply `min_ranges`/`max_ranges`.
+        *   If `sort_ranges`, sort the list.
+        *   If not `allow_overlapping_ranges`, check for overlaps.
+    4.  Return the processed list of range tuples or original value.
+    5.  Handles `Optional[List[Tuple[N,N]]]` if input is `None`.
+
+---
+
+### B.8. Boolean String/Numeric
+
+*   **Purpose:** Flexible parsing of boolean values from strings (e.g., "yes", "True", "1") or numbers (0, 1).
+*   **Field Annotation:** `bool`, `Optional[bool]`.
+*   **`format_spec.type`:** `"boolean_flexible"`
+*   **`format_spec.options`:**
+    *   `true_values: List[Union[str, int, float]]` (Default: `["true", "yes", "on", "1", 1, 1.0]`). Case-insensitive for strings.
+    *   `false_values: List[Union[str, int, float]]` (Default: `["false", "no", "off", "0", 0, 0.0]`). Case-insensitive for strings.
+*   **`autofix_settings`:**
+    *   `boolean_policy: BooleanPolicy` (Enum, e.g., `STRICT_MATCH`, `REJECT_IF_UNRECOGNIZED`, `BYPASS`)
+*   **Behavior:**
+    1.  If input is already a Python `bool`, it's used directly.
+    2.  Convert input to lowercase if string.
+    3.  Check if input is in `true_values`. If yes, result is `True`.
+    4.  Check if input is in `false_values`. If yes, result is `False`.
+    5.  If not found in either and policy is `REJECT_IF_UNRECOGNIZED`, mark for rejection.
+    6.  Handles `Optional[bool]` if input is `None`.
+
+---
+
+### B.9. File/Directory Path
+
+*   **Purpose:** Validating strings as file or directory paths with existence/type checks.
+*   **Field Annotation:** `pathlib.Path`, `str`, `Optional[...]`.
+*   **`format_spec.type`:** `"path_string"`
+*   **`format_spec.options`:**
+    *   `path_type: Literal["file", "dir", "any"]` (Default: `"any"`).
+    *   `must_exist: bool` (Default: `False`).
+    *   `resolve_path: bool` (Default: `True`): If `True`, converts to an absolute path.
+    *   `expand_user: bool` (Default: `True`): If `True`, expands `~`.
+    *   `allowed_extensions: Optional[List[str]]` (e.g., `[".txt", ".csv"]`). Case-insensitive. Only if `path_type` is `"file"`.
+    *   `base_path: Optional[str | Path]` (Default: `None`): If provided, relative paths are resolved against this base.
+*   **`autofix_settings`:**
+    *   `path_policy: PathPolicy` (Enum, e.g., `VALIDATE_ONLY`, `REJECT_IF_INVALID`, `BYPASS`)
+*   **Behavior:**
+    1.  If input is already a `Path` object, use it. If string, convert to `Path`.
+    2.  If `expand_user`, expand it.
+    3.  If `base_path` is given and path is relative, join with base.
+    4.  If `resolve_path`, resolve it (makes absolute, resolves symlinks).
+    5.  If `must_exist`:
+        *   Check `path.exists()`.
+        *   If `path_type == "file"`, check `path.is_file()`.
+        *   If `path_type == "dir"`, check `path.is_dir()`.
+        *   If checks fail, mark for rejection based on policy.
+    6.  If `path_type == "file"` and `allowed_extensions` are provided, check suffix. If no match, mark for rejection.
+    7.  Return `Path` object (or string if original annotation was string and policy allows) or original value.
+    8.  Handles `Optional` field if input is `None`.
+
+---
+**(General Note on all format fixers):** Each fixer should be designed to gracefully handle `None` input if the field's Pydantic annotation is `Optional`. Typically, if `None` is received for an optional field, the fixer should return `(FixStatusEnum.PROCESSED_UNMODIFIED, None)` or `(FixStatusEnum.BYPASSED, None)` without further processing, unless the format specifically targets `None` values. The `PydanticUndefined` value from `raw_data_dict.get()` should also be handled to ensure defaults are respected.
