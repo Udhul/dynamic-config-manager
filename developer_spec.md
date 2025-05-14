@@ -1,4 +1,4 @@
-# Dynamic Config Manager - Developer Specification (v2)
+# Dynamic Config Manager - Developer Specification (v2.1)
 
 ## 1. Introduction
 
@@ -8,7 +8,7 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
 ### 1.2. Core Philosophy
 *   **Pydantic-centric:** Leverage Pydantic V2 for model definition, type checking, and core validation.
 *   **Typed:** Emphasize strong typing for configuration clarity and safety, with enhanced Pylance/LSP support.
-*   **User-friendly & Intuitive:** Simple API for common tasks, with powerful customization options, including an optional custom base class and field constructor for easier definition.
+*   **User-friendly & Intuitive:** Simple API for common tasks, with powerful customization options, including an optional custom base class and field constructor for easier definition and attribute-based access.
 *   **Explicit over Implicit:** Clear control over persistence, saving, and validation behaviors.
 *   **Separation of Concerns:** `attach_auto_fix` pre-processes data based on defined formats and policies; Pydantic performs final validation against the model's type annotations and constraints.
 
@@ -18,11 +18,13 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
 *   Default save directory management with per-config overrides.
 *   Opt-in/out persistence for configurations (memory-only or file-backed).
 *   Support for JSON (default), YAML, and TOML file formats.
-*   Path-based deep access (`get_value`, `set_value`) for configuration values.
-*   Attribute-based access (`config_instance.active.path.to.value`) for *reading* values with full type hinting. Setting values with full pre-processing and auto-save pipeline is done via `set_value`.
-*   Automatic validation and (optional) auto-saving on value changes made through `set_value`.
+*   **Enhanced Access Methods:**
+    *   Path-based deep access (`get_value`, `set_value`) for configuration values.
+    *   Attribute-style access via `config_instance.active.path.to.value` for both getting (triggers `get_value`) and setting (triggers `set_value`) values, ensuring full validation and auto-save pipeline.
+    *   Easy metadata retrieval for any field via `config_instance.meta.path.to.value` (or similar mechanism) returning a comprehensive metadata object.
+*   Automatic validation and (optional) auto-saving on value changes made through `set_value` or attribute-style assignment.
 *   Restore functionality for individual values or entire configurations to defaults or file-persisted state.
-*   `attach_auto_fix` decorator for Pydantic models to enable input pre-processing:
+*   `attach_auto_fix` decorator for Pydantic models to enable input pre-processing for various data formats (numeric, options, ranges, multiple choice, list conversions, etc.):
     *   **Numeric fields:** Clamping/rejection based on `ge/gt/le/lt`, `multiple_of` enforcement (rounding or rejection). Safe evaluation of mathematical string expressions.
     *   **Options fields (single choice):** Snapping to nearest option or rejection.
     *   **String fields:** `min_length`/`max_length` pre-check (rejection if policy dictates).
@@ -33,6 +35,7 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
     *   Configurable policies (e.g., `CLAMP`, `NEAREST`, `REJECT`, `BYPASS`, and format-specific policies) for fixing behaviors, configurable globally via decorator or per-field.
 *   Handles `None` as a valid value if permitted by the field's type annotation (`Optional[T]`, `Union[T, None]`).
 *   Access to Pydantic field metadata, including constraints and structured `json_schema_extra` for UI hints, format specifications, and `autofix` settings.
+*   **Runtime Model Updates:** Support for programmatically updating field definitions (e.g., constraints, defaults) of a registered configuration model at runtime.
 
 ## 2. System Architecture
 
@@ -50,7 +53,8 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
 +-------------------+      Loads/Saves      +-----------------+
 |  ConfigInstance   | --------------------> |   Filesystem    |
 | (Wraps Pydantic   |                       | (JSON/YAML/TOML)|
-|  Model)           |                       +-----------------+
+|  Model; Provides  |                       +-----------------+
+|  Access Wrappers) |
 +-------------------+
          | Modifies via set_value()
          | Instantiates / Validates
@@ -69,9 +73,10 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
 ### 2.2. Main Components
 *   **2.2.1. Pydantic Configuration Models (User-defined):** Core structure. Can be plain `BaseSettings` or the enhanced `DynamicBaseSettings`.
 *   **2.2.2. `ConfigManager` (Singleton):** Global registry and service provider.
-*   **2.2.3. `ConfigInstance` (Managed configuration object):** Represents and manages a single, typed configuration.
+*   **2.2.3. `ConfigInstance` (Managed configuration object):** Represents and manages a single, typed configuration, and provides enhanced access wrappers (`.active`, `.meta`).
 *   **2.2.4. Validation Subsystem (`attach_auto_fix` and helpers):** Provides pre-processing logic.
 *   **2.2.5. (Optional) `DynamicBaseSettings` and `ConfigField`:** Convenience tools for defining models.
+*   **2.2.6. Accessor Proxies (within `ConfigInstance`):** Internal classes to enable attribute-style get/set and metadata access.
 
 ## 3. Component Deep Dive
 
@@ -154,6 +159,22 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
     *   `__iter__() -> Iterator[ConfigInstance]`: Iterates over all registered `ConfigInstance` objects.
     *   `save_all()`: Calls `persist()` on all registered, persistent `ConfigInstance` objects.
     *   `restore_all_defaults()`: Calls `restore_defaults()` on all registered `ConfigInstance` objects.
+    *   `update_model_field(config_name: str, field_path: str, new_field_definition: FieldInfo)`:
+        *   Allows runtime modification of a field within a registered model.
+        *   `config_name`: Name of the `ConfigInstance`.
+        *   `field_path`: Dot-separated path to the field (e.g., "parent.child.field_name").
+        *   `new_field_definition`: A Pydantic `FieldInfo` object representing the new field definition (could be created using `pydantic.Field` or our `ConfigField`).
+        *   **Mechanism:**
+            1.  Retrieves the `ConfigInstance`.
+            2.  Locates the target model class (could be nested) and field.
+            3.  Updates the `model_fields` attribute of the Pydantic model class.
+            4.  Calls `model_rebuild(force=True)` on the model class to reflect changes.
+            5.  The `ConfigInstance`'s `_defaults` and `_active` instances need to be carefully re-evaluated/re-validated against the new model definition. This might involve:
+                *   Creating a new `_defaults` instance.
+                *   Attempting to re-validate the current `_active.model_dump()` against the new model. Values that no longer conform might be reset to new defaults or raise errors, depending on a defined policy for this operation.
+            6.  This is an advanced operation and should be used with caution, as it can lead to configurations becoming invalid if not handled carefully.
+        *   **Note:** This requires direct manipulation of the Pydantic model class's internals and careful state management within the `ConfigInstance`.
+
 *   **Internal State (`_ConfigManagerInternal` class):**
     *   `_instances: Dict[str, ConfigInstance]`
     *   `_default_dir: Path`
@@ -174,12 +195,26 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
     *   `_save_path: Optional[Path]`
     *   `_auto_save: bool` (effective auto_save: `auto_save_param and persistent_param`)
     *   `_persistent: bool`
+*   **Accessor Proxies (Internal):**
+    *   `_ActiveAccessorProxy`: An object returned by `ConfigInstance.active`. It intercepts `__getattr__` and `__setattr__` to enable attribute-style access.
+    *   `_MetaAccessorProxy`: An object returned by `ConfigInstance.meta`. It intercepts `__getattr__` to enable attribute-style metadata retrieval.
 *   **Properties:**
     *   `active: T` (Read-only property): Returns a reference to the `_active` Pydantic model instance.
         *   **Important Note on Access:**
             *   **For Reading:** Direct attribute access like `val = config_instance.active.path.to.nested_value` is supported and provides full type hinting via Pylance/LSP.
             *   **For Setting:** To ensure the full `attach_auto_fix` pre-processing, Pydantic validation, and `auto_save` mechanisms are triggered, modifications **must** be made through `config_instance.set_value("path/to/value", new_value)`. Direct assignment (e.g., `config_instance.active.some_field = val`) will modify the Pydantic model in place, triggering only Pydantic's native field validators, bypassing the `attach_auto_fix` `model_validator` and `ConfigInstance`'s auto-save logic for that specific assignment.
-*   **Value Manipulation:**
+*   **Properties (Updated):**
+    *   `active: _ActiveAccessorProxy`:
+        *   Returns an instance of `_ActiveAccessorProxy` bound to this `ConfigInstance`.
+        *   **Getting Values:** `val = config_instance.active.path.to.value` will internally call `self.get_value("path/to/value")`. For nested models, `config_instance.active.parent` would return another `_ActiveAccessorProxy` scoped to that parent model.
+        *   **Setting Values:** `config_instance.active.path.to.value = new_val` will internally call `self.set_value("path/to/value", new_val)`, thus triggering the full validation and auto-save pipeline.
+        *   Provides full type hinting via Pylance/LSP, as it proxies the underlying Pydantic model.
+    *   `meta: _MetaAccessorProxy`:
+        *   Returns an instance of `_MetaAccessorProxy` bound to this `ConfigInstance`.
+        *   `metadata_dict = config_instance.meta.path.to.value` will internally call `self.get_metadata("path/to/value")`.
+        *   The returned `metadata_dict` will contain: `active_value`, `default_value`, `saved_value` (if applicable, loaded from disk on demand or cached), and all Pydantic `FieldInfo` details (type, constraints, `json_schema_extra` content).
+
+*   **Value Manipulation (`get_value`, `set_value`):**
     *   `get_value(path: str) -> Any`:
         *   Retrieves a value from the `_active` model using a path string (e.g., `"foo/bar/0/baz"`).
         *   Uses `_deep_get` helper for traversal.
@@ -194,6 +229,10 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
     *   `get_metadata(path: str) -> Dict[str, Any]`:
         *   Retrieves metadata for a field specified by a path string.
         *   Returns a dictionary including: `type` (annotation), `required`, `default`, `editable` (from `json_schema_extra`, defaults to `True`), Pydantic constraints (`ge`, `le`, etc.), and any other `json_schema_extra` content (including `ui_hint`, `ui_extra`, `options`, `autofix` settings, `format_spec`).
+    *   **Enhancement:** The dictionary returned by `get_metadata(path)` will also include:
+        *   `active_value: Any` (current value from `_active`).
+        *   `default_value: Any` (value from `_defaults`).
+        *   `saved_value: Any` (value loaded from the persisted file for this specific path, if file exists; could be `PydanticUndefined` or a sentinel if not found/applicable).
 *   **Persistence:**
     *   `persist(file_format: Optional[str]=None) -> bool` (alias: `save`):
         *   Saves the `_active.model_dump(mode="json")` to `_save_path`.
@@ -333,11 +372,30 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
 7.  If `config_instance._auto_save` is `True`, `config_instance.persist()` is called.
 8.  If `ValidationError` was raised at step 5.b, `ConfigInstance.set_value()` catches it and re-raises it wrapped in a `ValueError` with more context.
 
+
+## 5. Data Flow and Validation Sequence
+*   **For `ConfigInstance.set_value()`:** Same as spec v2.
+*   **For `config_instance.active.path.to.value = new_val` (Attribute Set):**
+    1.  The `_ActiveAccessorProxy`'s `__setattr__` (or nested equivalent for `path.to.value`) is invoked.
+    2.  It reconstructs the full path string (e.g., "path/to/value").
+    3.  It calls `self._config_instance_ref.set_value(full_path_string, new_val)`.
+    4.  The flow then follows the `ConfigInstance.set_value()` sequence from spec v2 (editability check, `_deep_set`, model re-instantiation, `attach_auto_fix`, Pydantic validation, auto-save).
+*   **For `val = config_instance.active.path.to.value` (Attribute Get):**
+    1.  The `_ActiveAccessorProxy`'s `__getattr__` is invoked.
+    2.  It reconstructs the full path string.
+    3.  It calls `self._config_instance_ref.get_value(full_path_string)`.
+    4.  The value is returned. If the attribute itself represents a nested Pydantic model, a new `_ActiveAccessorProxy` scoped to that nested model is returned.
+*   **For `metadata = config_instance.meta.path.to.value` (Metadata Get):**
+    1.  The `_MetaAccessorProxy`'s `__getattr__` is invoked.
+    2.  It reconstructs the full path string.
+    3.  It calls `self._config_instance_ref.get_metadata(full_path_string)`.
+    4.  The metadata dictionary is returned. If the attribute represents a nested model, a new `_MetaAccessorProxy` scoped to that nested model is returned.
+
 ## 6. Public API Summary (`__init__.py`)
 The `dynamic_config_manager/__init__.py` should expose:
-*   `ConfigManager` (the singleton instance)
+*   `ConfigManager` (singleton instance)
 *   `BaseSettings` (re-export from `pydantic_settings`)
-*   `DynamicBaseSettings` (new custom base class)
+*   `DynamicBaseSettings` (custom base class)
 *   `ConfigField` (new field constructor function)
 *   `BaseModel`, `Field`, `ValidationError` (re-exports from `pydantic`)
 *   `attach_auto_fix` (from `dynamic_config_manager.validation`)
@@ -385,75 +443,55 @@ from dynamic_config_manager import (
     NumericPolicy # Example policy enum
 )
 
-# 1. Define your configuration model with auto-fix and new field types
+# 1. Define your configuration model
 @attach_auto_fix(numeric_policy=NumericPolicy.CLAMP, eval_expressions=True)
-class AdvancedConfig(DynamicBaseSettings):
-    server_port: int = ConfigField(
-        default=8080, ge=1024, le=65535,
-        ui_hint="SpinBox"
-    )
-    log_level: str = ConfigField(
-        default="INFO",
-        options=["DEBUG", "INFO", "WARNING", "ERROR"], # For single choice
-        ui_hint="ComboBox"
-    )
-    processing_range: Tuple[int, int] = ConfigField(
-        default=(10, 90),
-        format_spec={
-            "type": "range",
-            "item_type": "int",
-            "min_item_value": 0,
-            "max_item_value": 100
-        },
-        autofix_settings={"range_policy": "clamp_items"} # clamp items within 0-100
-    )
-    selected_features: List[str] = ConfigField(
-        default_factory=list,
-        options=["feature_a", "feature_b", "feature_c", "feature_d"], # Source for multi-choice
-        format_spec={
-            "type": "multiple_choice",
-            "max_selections": 2
-        },
-        autofix_settings={"multiple_choice_policy": "remove_invalid"}
-    )
-    user_ids_input: List[int] = ConfigField( # Input might be "1,2, 3 , non_int, 5"
-        default_factory=list,
-        format_spec={
-            "type": "csv_to_list", # Assuming 'csv_to_list' handles item_type implicitly or configured
-            "item_type": "int",
-            "item_numeric_policy": "reject" # Reject non-int items
-        },
-        autofix_settings={"list_conversion_policy": "convert_best_effort"}
-    )
-    nullable_value: Optional[int] = ConfigField(default=None, ge=0)
+class AppSettings(DynamicBaseSettings):
+    server_port: int = ConfigField(default=8080, ge=1024, le=65535, ui_hint="SpinBox")
+    log_level: str = ConfigField(default="INFO", options=["DEBUG", "INFO"], ui_hint="ComboBox")
+    feature_flags: Optional[List[str]] = ConfigField(default=None, format_spec={"type": "multiple_choice"}, options=["A", "B", "C"])
 
-# 2. Set application-wide default config directory (optional)
-ConfigManager.default_dir = "~/.my_advanced_app/config"
+    class NestedConfig(DynamicBaseSettings): # Pydantic models used for nesting
+        nested_value: float = ConfigField(default=0.5, ge=0, le=1)
+    
+    nested: NestedConfig = ConfigField(default_factory=NestedConfig)
 
-# 3. Register the configuration
-adv_cfg_instance = ConfigManager.register("advanced_settings", AdvancedConfig, auto_save=True)
 
-# Access active config for reading (with type hints)
-active_conf = adv_cfg_instance.active
-print(f"Current Port: {active_conf.server_port}")
-print(f"Nullable initially: {active_conf.nullable_value}") # -> None
+# 2. Set default config directory
+ConfigManager.default_dir = "~/.my_app_v3/config"
 
-# 4. Set values using set_value to trigger full pipeline
-adv_cfg_instance.set_value("server_port", "9000-100") # -> 8900 (eval)
-adv_cfg_instance.set_value("processing_range", (5, 105)) # -> (5, 100) (range_policy clamps item)
-adv_cfg_instance.set_value("selected_features", ["feature_a", "feature_x", "feature_b"]) # -> ["feature_a", "feature_b"]
-adv_cfg_instance.set_value("user_ids_input", "1, 2,bad,4") # -> [1, 2, 4] (best effort conversion)
-adv_cfg_instance.set_value("nullable_value", 10)
-print(f"Nullable now: {adv_cfg_instance.get_value('nullable_value')}") # -> 10
-adv_cfg_instance.set_value("nullable_value", None) # Setting back to None is fine
-print(f"Nullable again: {adv_cfg_instance.get_value('nullable_value')}") # -> None
+# 3. Register
+app_settings = ConfigManager.register("app", AppSettings, auto_save=True)
 
-# 5. Restore defaults or individual values
-app_cfg_instance.restore_value("server_port", source="default")
-# app_cfg_instance.restore_defaults() # Restore all to model defaults
+# 4. Access and Modify using attribute style via .active
+print(f"Initial Port: {app_settings.active.server_port}") # Calls get_value("server_port")
+app_settings.active.server_port = "9000 - 100" # Calls set_value("server_port", "9000 - 100") -> 8900
+print(f"New Port: {app_settings.active.server_port}")
 
-# 6. Save all managed configs (if not auto-saved)
-# ConfigManager.save_all()
+app_settings.active.nested.nested_value = 0.75
+print(f"Nested Val: {app_settings.active.nested.nested_value}")
+
+# 5. Get metadata using .meta
+port_meta = app_settings.meta.server_port
+print(f"Port Active: {port_meta['active_value']}, Default: {port_meta['default_value']}")
+print(f"Port UI Hint: {port_meta['json_schema_extra']['ui_hint']}") # Access full schema
+print(f"Port Max (ge): {port_meta['le']}")
+
+nested_val_meta = app_settings.meta.nested.nested_value
+print(f"Nested Default: {nested_val_meta['default_value']}")
+
+
+# 6. Runtime field update (Advanced)
+try:
+    from pydantic import Field as PydanticField # Standard Pydantic Field
+    # Create a new FieldInfo for server_port with an updated 'le'
+    new_port_field = PydanticField(default=8000, ge=1000, le=30000, description="Updated port range")
+    # ConfigManager.update_model_field("app", "server_port", new_port_field)
+    
+    # app_settings.active.server_port = 25000 # This would now be valid
+    # print(f"Port after model update, new value: {app_settings.active.server_port}")
+    # print(f"New Port Max from meta: {app_settings.meta.server_port['le']}") # -> 30000
+except Exception as e:
+    print(f"Runtime model update example failed (conceptual): {e}")
 ```
 
 ## Appendix A: Helper function details (`manager.py`)
