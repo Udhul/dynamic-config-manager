@@ -8,7 +8,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union
+from typing import Any, Dict, List, Optional, Type, TypeVar, Union, Generic
 
 from pydantic import BaseModel, ValidationError
 from pydantic_core import to_jsonable_python
@@ -18,6 +18,41 @@ __all__ = ["ConfigManager"]
 
 log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseSettings)
+
+
+class _ActiveAccessorProxy(Generic[T]):
+    """Attribute style accessor for active values."""
+
+    def __init__(self, inst: "ConfigInstance", prefix: str = ""):
+        object.__setattr__(self, "_inst", inst)
+        object.__setattr__(self, "_prefix", prefix)
+
+    def __getattr__(self, item: str):
+        path = f"{self._prefix}.{item}" if self._prefix else item
+        val = self._inst.get_value(path)
+        if isinstance(val, BaseModel):
+            return _ActiveAccessorProxy(self._inst, path)
+        return val
+
+    def __setattr__(self, item: str, value: Any):
+        path = f"{self._prefix}.{item}" if self._prefix else item
+        self._inst.set_value(path, value)
+
+
+class _MetaAccessorProxy(Generic[T]):
+    """Attribute style accessor for field metadata."""
+
+    def __init__(self, inst: "ConfigInstance", prefix: str = ""):
+        object.__setattr__(self, "_inst", inst)
+        object.__setattr__(self, "_prefix", prefix)
+
+    def __getattr__(self, item: str):
+        path = f"{self._prefix}.{item}" if self._prefix else item
+        meta = self._inst.get_metadata(path)
+        if hasattr(meta.get("type"), "model_fields"):
+            return _MetaAccessorProxy(self._inst, path)
+        return meta
+
 
 # --------------------------------------------------------------------------- #
 #                              helpers                                         #
@@ -74,10 +109,23 @@ def _load_file(path: Path, *, file_format: Optional[str] = None) -> Dict[str, An
     fmt = (file_format or _detect_format(path)).lower()
     text = path.read_text(encoding="utf-8")
     if fmt == "yaml":
-        import yaml
+        try:
+            import yaml
+        except ImportError as e:
+            raise ImportError(
+                "YAML support requires PyYAML. Install with 'pip install dynamic-config-manager[yaml]'"
+            ) from e
         return yaml.safe_load(text) or {}
     if fmt == "toml":
-        import tomli
+        try:
+            import tomli
+        except ImportError:
+            try:
+                import tomllib as tomli
+            except ImportError as e:
+                raise ImportError(
+                    "TOML support requires tomli/tomllib. Install with 'pip install dynamic-config-manager[toml]'"
+                ) from e
         return tomli.loads(text)
     return json.loads(text)
 
@@ -85,10 +133,20 @@ def _load_file(path: Path, *, file_format: Optional[str] = None) -> Dict[str, An
 def _dump_file(path: Path, data: Dict[str, Any], *, file_format: Optional[str] = None):
     fmt = (file_format or _detect_format(path)).lower()
     if fmt == "yaml":
-        import yaml
+        try:
+            import yaml
+        except ImportError as e:
+            raise ImportError(
+                "YAML support requires PyYAML. Install with 'pip install dynamic-config-manager[yaml]'"
+            ) from e
         path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     elif fmt == "toml":
-        import tomli_w
+        try:
+            import tomli_w
+        except ImportError as e:
+            raise ImportError(
+                "TOML write support requires tomli-w. Install with 'pip install dynamic-config-manager[toml]'"
+            ) from e
         path.write_text(tomli_w.dumps(data), encoding="utf-8")
     else:  # json
         path.write_text(
@@ -133,11 +191,15 @@ class ConfigInstance:
     # ------------ public (value access) -------------------------------- #
 
     @property
-    def active(self) -> T:
-        return self._active
+    def active(self) -> _ActiveAccessorProxy[T]:
+        return _ActiveAccessorProxy(self)
+
+    @property
+    def meta(self) -> _MetaAccessorProxy[T]:
+        return _MetaAccessorProxy(self)
 
     def get_value(self, path: str) -> Any:
-        return _deep_get(self._active, path.split("/"))
+        return _deep_get(self._active, path.split("."))
 
     def set_value(self, path: str, value: Any):
         meta = self.get_metadata(path)
@@ -145,7 +207,7 @@ class ConfigInstance:
             raise PermissionError(f"Field '{path}' is not editable.")
 
         try:
-            new_inst = _deep_set(self._active, path.split("/"), value)
+            new_inst = _deep_set(self._active, path.split("."), value)
             self._active = self._model_cls(**new_inst.model_dump(mode="python"))
         except ValidationError as e:
             raise ValueError(f"Validation failed setting '{path}':\n{e}") from e
@@ -156,7 +218,7 @@ class ConfigInstance:
     # ------------ metadata -------------------------------------------- #
 
     def get_metadata(self, path: str) -> Dict[str, Any]:
-        keys = path.split("/")
+        keys = path.split(".")
         cur: Union[Type[BaseModel], BaseModel] = self._model_cls
         for k in keys:
             if not hasattr(cur, "model_fields"):
@@ -180,10 +242,10 @@ class ConfigInstance:
 
     def restore_value(self, path: str, source: str = "default"):
         if source == "default":
-            new_val = _deep_get(self._defaults, path.split("/"))
+            new_val = _deep_get(self._defaults, path.split("."))
         elif source == "file":
             disk = self._load_from_disk() or self._defaults
-            new_val = _deep_get(disk, path.split("/"))
+            new_val = _deep_get(disk, path.split("."))
         else:
             raise ValueError("source must be 'default' or 'file'")
         self.set_value(path, new_val)
@@ -214,11 +276,15 @@ class ConfigInstance:
 
     save = persist  # alias
 
-    def save_as(self, path: os.PathLike | str, *, file_format: str | None = None) -> bool:
+    def save_as(
+        self, path: os.PathLike | str, *, file_format: str | None = None
+    ) -> bool:
         path = Path(path).expanduser().resolve()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            _dump_file(path, self._active.model_dump(mode="json"), file_format=file_format)
+            _dump_file(
+                path, self._active.model_dump(mode="json"), file_format=file_format
+            )
             log.info("Config '%s' exported to %s", self.name, path)
             return True
         except Exception as exc:

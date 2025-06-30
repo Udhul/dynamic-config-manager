@@ -17,6 +17,10 @@ packages = ["dynamic_config_manager"]
 version = {attr = "dynamic_config_manager.__version__"} # Read version from dynamic_config_manager/__init__.py
 dependencies = {file = ["requirements.txt"]} # Read dependencies from requirements.txt
 
+[project.optional-dependencies]
+yaml = ["PyYAML>=6.0"]
+toml = ["tomli>=2.0", "tomli-w>=1.0"]
+
 # --- Optional Sections (Commented Out) which we may use later ---
 
 # [project.scripts]

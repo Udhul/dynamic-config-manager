@@ -6,7 +6,7 @@ This document tracks development toward a stable v1 release by mapping developer
 
 | Increment | Focus | Status |
 |-----------|-------|--------|
-| **PI-1** | Foundation & API stabilization | To Do |
+| **PI-1** | Foundation & API stabilization | Done |
 | **PI-2** | Validation & Auto-fix subsystem | To Do |
 | **PI-3** | Metadata & persistence features | To Do |
 | **PI-4** | Extended formats & CLI / extras | To Do |

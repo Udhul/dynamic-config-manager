@@ -20,7 +20,7 @@ Main ideas
   * do nothing → file is saved to
     `<default_dir>/<name>.json` **(default_dir is a stable folder inside
     `tempfile.gettempdir()` unless you override it once early in your app)**;
-  * pass `save_path=` to push the file somewhere else;  
+  * pass `save_path=` to push the file somewhere else;
   * pass `persistent=False` for memory-only configs.
 
 Quick example
@@ -73,7 +73,9 @@ except _meta.PackageNotFoundError:  # Editable checkout / source tree
 # --------------------------------------------------------------------- #
 # Logging
 # --------------------------------------------------------------------- #
-_logging.getLogger(__name__).addHandler(_logging.NullHandler()) # *never* touch the root logger.
+_logging.getLogger(__name__).addHandler(
+    _logging.NullHandler()
+)  # *never* touch the root logger.
 
 # --------------------------------------------------------------------- #
 # Public re-exports
@@ -81,14 +83,23 @@ _logging.getLogger(__name__).addHandler(_logging.NullHandler()) # *never* touch 
 from pydantic_settings import BaseSettings  # noqa: E402
 from pydantic import BaseModel, Field, ValidationError  # noqa: E402
 
+from .helpers import DynamicBaseSettings, ConfigField  # noqa: E402
 from .manager import ConfigManager  # noqa: E402  (singleton instance)
-from .validation import attach_auto_fix
+from .validation import (
+    attach_auto_fix,
+    NumericPolicy,
+    OptionsPolicy,
+)
 
 __all__ = [
     "ConfigManager",
     "BaseSettings",
     "BaseModel",
     "Field",
+    "DynamicBaseSettings",
+    "ConfigField",
     "ValidationError",
-    "attach_auto_fix"
+    "attach_auto_fix",
+    "NumericPolicy",
+    "OptionsPolicy",
 ]
