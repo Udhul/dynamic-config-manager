@@ -89,6 +89,14 @@ from .validation import (
     attach_auto_fix,
     NumericPolicy,
     OptionsPolicy,
+    RangePolicy,
+    MultipleChoicePolicy,
+    ListConversionPolicy,
+    FixStatusEnum,
+    BooleanPolicy,
+    DatetimePolicy,
+    PathPolicy,
+    MultipleRangesPolicy,
 )
 
 __all__ = [
@@ -102,4 +110,12 @@ __all__ = [
     "attach_auto_fix",
     "NumericPolicy",
     "OptionsPolicy",
+    "RangePolicy",
+    "MultipleChoicePolicy",
+    "ListConversionPolicy",
+    "FixStatusEnum",
+    "BooleanPolicy",
+    "DatetimePolicy",
+    "PathPolicy",
+    "MultipleRangesPolicy",
 ]
