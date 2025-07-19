@@ -68,7 +68,7 @@ import logging as _logging
 try:  # When installed (pip/poetry)
     __version__: str = _meta.version("dynamic_config_manager")
 except _meta.PackageNotFoundError:  # Editable checkout / source tree
-    __version__ = "0.2.0"
+    __version__ = "1.0.0"
 
 # --------------------------------------------------------------------- #
 # Logging
@@ -98,6 +98,7 @@ from .validation import (
     PathPolicy,
     MultipleRangesPolicy,
 )
+from .watchers import watch_and_reload
 
 __all__ = [
     "ConfigManager",
@@ -118,4 +119,5 @@ __all__ = [
     "DatetimePolicy",
     "PathPolicy",
     "MultipleRangesPolicy",
+    "watch_and_reload",
 ]

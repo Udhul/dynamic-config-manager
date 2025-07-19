@@ -25,3 +25,31 @@ dcm-cli show config.json
 dcm-cli set config.json ui.theme dark
 ```
 
+## Quick Start
+
+Define your configuration using Pydantic models, register it with the manager and access values safely:
+
+```python
+from dynamic_config_manager import ConfigManager, DynamicBaseSettings, ConfigField
+
+class UIConfig(DynamicBaseSettings):
+    theme: str = ConfigField("light", options=["light", "dark"])
+
+cfg = ConfigManager.register("ui", UIConfig, auto_save=True)
+cfg.active.theme = "dark"  # validated and persisted
+```
+
+## API Reference
+
+See [developer_spec.md](developer_spec.md) for a detailed specification of all available helpers and manager features.
+
+## Watching for Changes
+
+```python
+from dynamic_config_manager import watch_and_reload
+
+thread, stop = watch_and_reload(["ui"], debounce=100)
+# ... make changes to ui.json from another process ...
+stop.set()  # stop watching
+```
+

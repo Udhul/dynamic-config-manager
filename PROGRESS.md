@@ -10,7 +10,7 @@ This document tracks development toward a stable v1 release by mapping developer
 | **PI-2** | Validation & Auto-fix subsystem | Done |
 | **PI-3** | Metadata & persistence features | Done |
 | **PI-4** | Extended formats & CLI / extras | Done |
-| **PI-5** | Quality-of-life, docs & packaging | To Do |
+| **PI-5** | Quality-of-life, docs & packaging | Done |
 
 Each increment builds on the previous one so that later updates avoid breaking existing behaviour.
 
