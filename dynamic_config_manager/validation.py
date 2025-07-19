@@ -563,6 +563,20 @@ def _auto_fix_multiple_ranges(
 
 
 # ------------------------------------------------------------------
+# utility helpers
+# ------------------------------------------------------------------
+
+def _field_meta_get(info: FieldInfo, key: str) -> Any | None:
+    """Return ``key`` from ``info.metadata`` if present and not ``None``."""
+    for m in info.metadata:
+        if hasattr(m, key):
+            val = getattr(m, key)
+            if val is not None:
+                return val
+    return None
+
+
+# ------------------------------------------------------------------
 # public decorator
 # ------------------------------------------------------------------
 
@@ -612,14 +626,6 @@ def attach_auto_fix(
 
             fixed = dict(raw)
 
-            def meta_get(key: str):
-                for m in info.metadata:
-                    if hasattr(m, key):
-                        val = getattr(m, key)
-                        if val is not None:
-                            return val
-                return None
-
             for field_name, info in cls.model_fields.items():
                 if field_name not in fixed:
                     continue
@@ -644,11 +650,11 @@ def attach_auto_fix(
                     overrides.get("multiple_ranges_policy", multi_range_pol)
                 )
 
-                low = meta_get("ge") or meta_get("gt")
-                high = meta_get("le") or meta_get("lt")
-                m_len = meta_get("min_length")
-                M_len = meta_get("max_length")
-                mult_of = meta_get("multiple_of")
+                low = _field_meta_get(info, "ge") or _field_meta_get(info, "gt")
+                high = _field_meta_get(info, "le") or _field_meta_get(info, "lt")
+                m_len = _field_meta_get(info, "min_length")
+                M_len = _field_meta_get(info, "max_length")
+                mult_of = _field_meta_get(info, "multiple_of")
 
                 fmt_type = fmt.get("type")
                 if fmt_type == "range":
