@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, TypeVar, Union, Generic
 
 from pydantic import BaseModel, ValidationError
+from pydantic.fields import FieldInfo, PydanticUndefined
 from pydantic_core import to_jsonable_python
 from pydantic_settings import BaseSettings
 
@@ -74,23 +75,34 @@ def _deep_get(data: Any, keys: List[str]) -> Any:
 
 
 def _deep_set(data: Any, keys: List[str], value: Any) -> BaseModel | Any:
+    """Return a copy of ``data`` with ``value`` written at ``keys`` path."""
+
     if not keys:
         return value
+
     head, *tail = keys
+
+    # normalise None so that intermediate containers can be created
+    if data is None:
+        data = [] if head.isdigit() else {}
 
     if isinstance(data, BaseModel):
         copied = data.model_dump(mode="python")
-        copied[head] = _deep_set(copied[head], tail, value)
+        next_val = copied.get(head)
+        copied[head] = _deep_set(next_val, tail, value)
         return data.__class__(**copied)
 
     if isinstance(data, dict):
         copied = {**data}
-        copied[head] = _deep_set(copied[head], tail, value)
+        next_val = copied.get(head)
+        copied[head] = _deep_set(next_val, tail, value)
         return copied
 
     if isinstance(data, list):
         idx = int(head)
         copied = list(data)
+        while len(copied) <= idx:
+            copied.append(None)
         copied[idx] = _deep_set(copied[idx], tail, value)
         return copied
 
@@ -219,23 +231,41 @@ class ConfigInstance:
 
     def get_metadata(self, path: str) -> Dict[str, Any]:
         keys = path.split(".")
-        cur: Union[Type[BaseModel], BaseModel] = self._model_cls
-        for k in keys:
-            if not hasattr(cur, "model_fields"):
+        cur_model: Union[Type[BaseModel], BaseModel] = self._model_cls
+        active_obj: BaseModel | Any = self._active
+        default_obj: BaseModel | Any = self._defaults
+
+        for idx, k in enumerate(keys):
+            if not hasattr(cur_model, "model_fields"):
                 raise KeyError(f"'{path}' is not a model field.")
-            field = cur.model_fields[k]
-            cur = field.annotation
+            field = cur_model.model_fields[k]
+            if idx < len(keys) - 1:
+                cur_model = field.annotation
+                active_obj = getattr(active_obj, k)
+                default_obj = getattr(default_obj, k)
 
         extra = dict(field.json_schema_extra or {})
-        extra.update(
-            {
-                "type": field.annotation,
-                "required": field.is_required(),
-                "default": field.default,
-                "editable": extra.get("editable", True),
-                **_extract_constraints(field),
-            }
-        )
+        meta = {
+            "type": field.annotation,
+            "required": field.is_required(),
+            "default": field.default,
+            "editable": extra.get("editable", True),
+            **_extract_constraints(field),
+            "active_value": _deep_get(self._active, keys),
+            "default_value": _deep_get(self._defaults, keys),
+        }
+
+        saved_val = PydanticUndefined
+        if self._save_path and self._save_path.exists():
+            disk = self._load_from_disk()
+            if disk is not None:
+                try:
+                    saved_val = _deep_get(disk, keys)
+                except Exception:
+                    saved_val = PydanticUndefined
+
+        meta["saved_value"] = saved_val
+        extra.update(meta)
         return extra
 
     # ------------ restore helpers ------------------------------------- #
@@ -405,6 +435,57 @@ class _ConfigManagerInternal:
     def restore_all_defaults(self):
         for inst in self._instances.values():
             inst.restore_defaults()
+
+    def update_model_field(
+        self,
+        config_name: str,
+        field_path: str,
+        new_field_definition: "FieldInfo",
+    ) -> bool:
+        """Dynamically update a field definition on a registered model."""
+
+        from pydantic import create_model
+        from pydantic.fields import FieldInfo
+
+        inst = self._instances[config_name]
+        parts = field_path.split(".")
+
+        def _rebuild(model_cls: Type[BaseModel], keys: List[str]) -> Type[BaseModel]:
+            name = keys[0]
+            field = model_cls.model_fields[name]
+            if len(keys) == 1:
+                fields = {
+                    n: (f.annotation, new_field_definition if n == name else f)
+                    for n, f in model_cls.model_fields.items()
+                }
+                New = create_model(model_cls.__name__, __base__=model_cls.__bases__[0], **fields)
+                New.model_rebuild(force=True)
+                return New
+            else:
+                nested = _rebuild(field.annotation, keys[1:])
+                fields = {
+                    n: (
+                        nested if n == name else f.annotation,
+                        f,
+                    )
+                    for n, f in model_cls.model_fields.items()
+                }
+                New = create_model(model_cls.__name__, __base__=model_cls.__bases__[0], **fields)
+                New.model_rebuild(force=True)
+                return New
+
+        candidate_cls = _rebuild(inst._model_cls, parts)
+
+        try:
+            new_active = candidate_cls(**inst._active.model_dump(mode="python"))
+        except ValidationError as exc:
+            log.error("Model update failed: %s", exc)
+            return False
+
+        inst._model_cls = candidate_cls
+        inst._active = new_active
+        inst._defaults = candidate_cls()
+        return True
 
     # ---------- helpers ----------------------------------------------- #
 
