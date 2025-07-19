@@ -23,8 +23,8 @@ toml = ["tomli>=2.0", "tomli-w>=1.0"]
 
 # --- Optional Sections (Commented Out) which we may use later ---
 
-# [project.scripts]
-# dcm-cli = "dynamic_config_manager.cli:main" # For later CLI
+[project.scripts]
+dcm-cli = "dynamic_config_manager.cli:main"
 
 # [tool.setuptools.package-data]
 # "dynamic_config_manager" = ["*.json", "data/*.json"] # For later package-data

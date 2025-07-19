@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from dynamic_config_manager import (
     ConfigManager,
     DynamicBaseSettings,
@@ -35,6 +36,32 @@ class ListCfg(DynamicBaseSettings):
         autofix_settings={"list_conversion_policy": "convert_or_reject"},
     )
 
+
+@attach_auto_fix()
+class BoolCfg(DynamicBaseSettings):
+    flag: bool = ConfigField(False, format_spec={"type": "boolean_flexible"})
+
+
+@attach_auto_fix()
+class PathCfg(DynamicBaseSettings):
+    out: Path = ConfigField(
+        "out.txt",
+        format_spec={"type": "path_string", "expand_user": False, "resolve_path": True},
+    )
+
+
+@attach_auto_fix()
+class MultiRangeCfg(DynamicBaseSettings):
+    ranges: list[tuple[int, int]] = ConfigField(
+        [(0, 1)],
+        format_spec={
+            "type": "multiple_ranges",
+            "input_separator_list": ";",
+            "input_separator_range": "-",
+            "item_range_item_type": "int",
+        },
+    )
+
 def setup_function(_):
     ConfigManager._instances.clear()
 
@@ -65,3 +92,25 @@ def test_list_conversion(tmp_path):
     inst = ConfigManager.register("list", ListCfg)
     inst.active.items = "2,3,4"
     assert inst.active.items == [2, 3, 4]
+
+
+def test_boolean_flexible(tmp_path):
+    ConfigManager.default_dir = tmp_path
+    inst = ConfigManager.register("bool", BoolCfg)
+    inst.active.flag = "YES"
+    assert inst.active.flag is True
+
+
+def test_path_string(tmp_path):
+    ConfigManager.default_dir = tmp_path
+    inst = ConfigManager.register("path", PathCfg)
+    p = tmp_path / "out.txt"
+    inst.active.out = str(p)
+    assert inst.active.out == p.resolve()
+
+
+def test_multiple_ranges(tmp_path):
+    ConfigManager.default_dir = tmp_path
+    inst = ConfigManager.register("mr", MultiRangeCfg)
+    inst.active.ranges = "1-2;3-4"
+    assert inst.active.ranges == [(1, 2), (3, 4)]
