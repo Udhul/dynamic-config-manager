@@ -14,7 +14,7 @@ dynamic = ["dependencies", "version"]
 packages = ["dynamic_config_manager"]
 
 [tool.setuptools.dynamic]
-version = {attr = "dynamic_config_manager.__version__"} # Read version from dynamic_config_manager/__init__.py
+version = {attr = "dynamic_config_manager._version.__version__"} # Dynamically set version from _version.py
 dependencies = {file = ["requirements.txt"]} # Read dependencies from requirements.txt
 
 [project.optional-dependencies]

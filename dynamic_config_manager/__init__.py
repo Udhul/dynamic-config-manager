@@ -65,10 +65,7 @@ import logging as _logging
 # --------------------------------------------------------------------- #
 # Version
 # --------------------------------------------------------------------- #
-try:  # When installed (pip/poetry)
-    __version__: str = _meta.version("dynamic_config_manager")
-except _meta.PackageNotFoundError:  # Editable checkout / source tree
-    __version__ = "1.0.0"
+from ._version import __version__
 
 # --------------------------------------------------------------------- #
 # Logging
