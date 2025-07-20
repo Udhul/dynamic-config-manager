@@ -257,6 +257,14 @@ class ConfigInstance:
             raise PermissionError(f"Field '{path}' is not editable.")
 
         try:
+            low = meta.get("ge") if meta.get("ge") is not None else meta.get("gt")
+            high = meta.get("le") if meta.get("le") is not None else meta.get("lt")
+            if (low is not None or high is not None) and isinstance(value, (int, float)):
+                if low is not None and value < low:
+                    value = low
+                if high is not None and value > high:
+                    value = high
+
             raw = _deep_set_dict(self._active, path.split("."), value)
             self._active = self._model_cls(**raw)
         except ValidationError as e:

@@ -711,6 +711,9 @@ def attach_auto_fix(
 
         attrs = {f"__auto_fix_{id(_auto)}": _auto}
         new_cls = type(_cls.__name__, (_cls,), attrs)
+        new_cls.__module__ = _cls.__module__
+        new_cls.__qualname__ = _cls.__qualname__
+        new_cls.model_rebuild(force=True)
         return new_cls
 
     if cls is not None:

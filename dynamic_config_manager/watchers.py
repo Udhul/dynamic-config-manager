@@ -42,7 +42,7 @@ def watch_and_reload(
             if inst._save_path:
                 fpath = inst._save_path.resolve()
                 file_map[fpath] = inst
-                watch_paths.add(fpath if fpath.exists() else fpath.parent)
+                watch_paths.add(fpath.parent)
 
         if not watch_paths:
             return
