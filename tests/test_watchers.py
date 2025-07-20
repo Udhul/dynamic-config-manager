@@ -17,6 +17,9 @@ def test_watch_and_reload(tmp_path):
     inst.persist()
     thread, stop = watch_and_reload(["simple"], debounce=100)
 
+    # Give watcher time to start
+    time.sleep(0.1)
+
     path = tmp_path / "simple.json"
     data = json.loads(path.read_text())
     data["foo"] = 9
