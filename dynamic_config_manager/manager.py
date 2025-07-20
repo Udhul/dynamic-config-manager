@@ -109,6 +109,44 @@ def _deep_set(data: Any, keys: List[str], value: Any) -> BaseModel | Any:
     raise KeyError(f"Cannot traverse into {type(data)} with '{head}'.")
 
 
+def _deep_set_dict(data: Any, keys: List[str], value: Any) -> Any:
+    """Return a plain Python structure with ``value`` set at ``keys`` path.
+
+    Similar to :func:`_deep_set` but never instantiates Pydantic models.
+    All ``BaseModel`` instances are treated as dictionaries via
+    ``model_dump(mode="python")`` so that validation only happens once when the
+    full model is reconstructed. This avoids early validation errors before
+    any auto-fix logic runs.
+    """
+
+    if not keys:
+        return value
+
+    head, *tail = keys
+
+    if isinstance(data, BaseModel):
+        data = data.model_dump(mode="python")
+
+    if data is None:
+        data = [] if head.isdigit() else {}
+
+    if isinstance(data, dict):
+        copied = {**data}
+        next_val = copied.get(head)
+        copied[head] = _deep_set_dict(next_val, tail, value)
+        return copied
+
+    if isinstance(data, list):
+        idx = int(head)
+        copied = list(data)
+        while len(copied) <= idx:
+            copied.append(None)
+        copied[idx] = _deep_set_dict(copied[idx], tail, value)
+        return copied
+
+    raise KeyError(f"Cannot traverse into {type(data)} with '{head}'.")
+
+
 # ---------- file I/O -------------------------------------------------------- #
 
 
@@ -219,8 +257,8 @@ class ConfigInstance:
             raise PermissionError(f"Field '{path}' is not editable.")
 
         try:
-            new_inst = _deep_set(self._active, path.split("."), value)
-            self._active = self._model_cls(**new_inst.model_dump(mode="python"))
+            raw = _deep_set_dict(self._active, path.split("."), value)
+            self._active = self._model_cls(**raw)
         except ValidationError as e:
             raise ValueError(f"Validation failed setting '{path}':\n{e}") from e
 

@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from pathlib import Path
 
@@ -95,8 +96,11 @@ def test_watch_and_reload_autofix(tmp_path: Path):
     thread, stop = watch_and_reload(["auto"], debounce=100)
     data = json.loads(path.read_text())
     data["val"] = "5*2"
-    path.write_text(json.dumps(data))
-    time.sleep(0.5)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(data, f)
+        f.flush()
+        os.fsync(f.fileno())
+    time.sleep(1)
     stop.set()
     thread.join(timeout=1)
 

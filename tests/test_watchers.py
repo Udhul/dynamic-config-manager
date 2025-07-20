@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from dynamic_config_manager import ConfigManager, DynamicBaseSettings, ConfigField, watch_and_reload
 
@@ -19,7 +20,10 @@ def test_watch_and_reload(tmp_path):
     path = tmp_path / "simple.json"
     data = json.loads(path.read_text())
     data["foo"] = 9
-    path.write_text(json.dumps(data))
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(data, f)
+        f.flush()
+        os.fsync(f.fileno())
 
     time.sleep(0.3)
     stop.set()
