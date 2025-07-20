@@ -21,6 +21,18 @@ dependencies = {file = ["requirements.txt"]} # Read dependencies from requiremen
 yaml = ["PyYAML>=6.0"]
 toml = ["tomli>=2.0", "tomli-w>=1.0"]
 watch = ["watchfiles>=0.20"]
+all = [
+  "PyYAML>=6.0",
+  "tomli>=2.0", "tomli-w>=1.0",
+  "watchfiles>=0.20"
+]
+ci = [
+  "PyYAML>=6.0",
+  "tomli>=2.0", "tomli-w>=1.0",
+  "watchfiles>=0.20",
+  "pytest",
+  "flake8"
+]
 
 # --- Optional Sections (Commented Out) which we may use later ---
 
