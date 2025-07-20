@@ -2,3 +2,6 @@ __pycache__
 inactive
 test_configs
 *.egg-info
+*.code-workspace
+.vscode
+.venv

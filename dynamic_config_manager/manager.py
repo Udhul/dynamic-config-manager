@@ -8,9 +8,10 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union
+from typing import Any, Dict, List, Optional, Type, TypeVar, Union, Generic
 
 from pydantic import BaseModel, ValidationError
+from pydantic.fields import FieldInfo, PydanticUndefined
 from pydantic_core import to_jsonable_python
 from pydantic_settings import BaseSettings
 
@@ -18,6 +19,41 @@ __all__ = ["ConfigManager"]
 
 log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseSettings)
+
+
+class _ActiveAccessorProxy(Generic[T]):
+    """Attribute style accessor for active values."""
+
+    def __init__(self, inst: "ConfigInstance", prefix: str = ""):
+        object.__setattr__(self, "_inst", inst)
+        object.__setattr__(self, "_prefix", prefix)
+
+    def __getattr__(self, item: str):
+        path = f"{self._prefix}.{item}" if self._prefix else item
+        val = self._inst.get_value(path)
+        if isinstance(val, BaseModel):
+            return _ActiveAccessorProxy(self._inst, path)
+        return val
+
+    def __setattr__(self, item: str, value: Any):
+        path = f"{self._prefix}.{item}" if self._prefix else item
+        self._inst.set_value(path, value)
+
+
+class _MetaAccessorProxy(Generic[T]):
+    """Attribute style accessor for field metadata."""
+
+    def __init__(self, inst: "ConfigInstance", prefix: str = ""):
+        object.__setattr__(self, "_inst", inst)
+        object.__setattr__(self, "_prefix", prefix)
+
+    def __getattr__(self, item: str):
+        path = f"{self._prefix}.{item}" if self._prefix else item
+        meta = self._inst.get_metadata(path)
+        if hasattr(meta.get("type"), "model_fields"):
+            return _MetaAccessorProxy(self._inst, path)
+        return meta
+
 
 # --------------------------------------------------------------------------- #
 #                              helpers                                         #
@@ -39,24 +75,73 @@ def _deep_get(data: Any, keys: List[str]) -> Any:
 
 
 def _deep_set(data: Any, keys: List[str], value: Any) -> BaseModel | Any:
+    """Return a copy of ``data`` with ``value`` written at ``keys`` path."""
+
     if not keys:
         return value
+
     head, *tail = keys
+
+    # normalise None so that intermediate containers can be created
+    if data is None:
+        data = [] if head.isdigit() else {}
 
     if isinstance(data, BaseModel):
         copied = data.model_dump(mode="python")
-        copied[head] = _deep_set(copied[head], tail, value)
+        next_val = copied.get(head)
+        copied[head] = _deep_set(next_val, tail, value)
         return data.__class__(**copied)
 
     if isinstance(data, dict):
         copied = {**data}
-        copied[head] = _deep_set(copied[head], tail, value)
+        next_val = copied.get(head)
+        copied[head] = _deep_set(next_val, tail, value)
         return copied
 
     if isinstance(data, list):
         idx = int(head)
         copied = list(data)
+        while len(copied) <= idx:
+            copied.append(None)
         copied[idx] = _deep_set(copied[idx], tail, value)
+        return copied
+
+    raise KeyError(f"Cannot traverse into {type(data)} with '{head}'.")
+
+
+def _deep_set_dict(data: Any, keys: List[str], value: Any) -> Any:
+    """Return a plain Python structure with ``value`` set at ``keys`` path.
+
+    Similar to :func:`_deep_set` but never instantiates Pydantic models.
+    All ``BaseModel`` instances are treated as dictionaries via
+    ``model_dump(mode="python")`` so that validation only happens once when the
+    full model is reconstructed. This avoids early validation errors before
+    any auto-fix logic runs.
+    """
+
+    if not keys:
+        return value
+
+    head, *tail = keys
+
+    if isinstance(data, BaseModel):
+        data = data.model_dump(mode="python")
+
+    if data is None:
+        data = [] if head.isdigit() else {}
+
+    if isinstance(data, dict):
+        copied = {**data}
+        next_val = copied.get(head)
+        copied[head] = _deep_set_dict(next_val, tail, value)
+        return copied
+
+    if isinstance(data, list):
+        idx = int(head)
+        copied = list(data)
+        while len(copied) <= idx:
+            copied.append(None)
+        copied[idx] = _deep_set_dict(copied[idx], tail, value)
         return copied
 
     raise KeyError(f"Cannot traverse into {type(data)} with '{head}'.")
@@ -74,10 +159,23 @@ def _load_file(path: Path, *, file_format: Optional[str] = None) -> Dict[str, An
     fmt = (file_format or _detect_format(path)).lower()
     text = path.read_text(encoding="utf-8")
     if fmt == "yaml":
-        import yaml
+        try:
+            import yaml
+        except ImportError as e:
+            raise ImportError(
+                "YAML support requires PyYAML. Install with 'pip install dynamic-config-manager[yaml]'"
+            ) from e
         return yaml.safe_load(text) or {}
     if fmt == "toml":
-        import tomli
+        try:
+            import tomli
+        except ImportError:
+            try:
+                import tomllib as tomli
+            except ImportError as e:
+                raise ImportError(
+                    "TOML support requires tomli/tomllib. Install with 'pip install dynamic-config-manager[toml]'"
+                ) from e
         return tomli.loads(text)
     return json.loads(text)
 
@@ -85,10 +183,20 @@ def _load_file(path: Path, *, file_format: Optional[str] = None) -> Dict[str, An
 def _dump_file(path: Path, data: Dict[str, Any], *, file_format: Optional[str] = None):
     fmt = (file_format or _detect_format(path)).lower()
     if fmt == "yaml":
-        import yaml
+        try:
+            import yaml
+        except ImportError as e:
+            raise ImportError(
+                "YAML support requires PyYAML. Install with 'pip install dynamic-config-manager[yaml]'"
+            ) from e
         path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     elif fmt == "toml":
-        import tomli_w
+        try:
+            import tomli_w
+        except ImportError as e:
+            raise ImportError(
+                "TOML write support requires tomli-w. Install with 'pip install dynamic-config-manager[toml]'"
+            ) from e
         path.write_text(tomli_w.dumps(data), encoding="utf-8")
     else:  # json
         path.write_text(
@@ -133,11 +241,15 @@ class ConfigInstance:
     # ------------ public (value access) -------------------------------- #
 
     @property
-    def active(self) -> T:
-        return self._active
+    def active(self) -> _ActiveAccessorProxy[T]:
+        return _ActiveAccessorProxy(self)
+
+    @property
+    def meta(self) -> _MetaAccessorProxy[T]:
+        return _MetaAccessorProxy(self)
 
     def get_value(self, path: str) -> Any:
-        return _deep_get(self._active, path.split("/"))
+        return _deep_get(self._active, path.split("."))
 
     def set_value(self, path: str, value: Any):
         meta = self.get_metadata(path)
@@ -145,8 +257,16 @@ class ConfigInstance:
             raise PermissionError(f"Field '{path}' is not editable.")
 
         try:
-            new_inst = _deep_set(self._active, path.split("/"), value)
-            self._active = self._model_cls(**new_inst.model_dump(mode="python"))
+            low = meta.get("ge") if meta.get("ge") is not None else meta.get("gt")
+            high = meta.get("le") if meta.get("le") is not None else meta.get("lt")
+            if (low is not None or high is not None) and isinstance(value, (int, float)):
+                if low is not None and value < low:
+                    value = low
+                if high is not None and value > high:
+                    value = high
+
+            raw = _deep_set_dict(self._active, path.split("."), value)
+            self._active = self._model_cls(**raw)
         except ValidationError as e:
             raise ValueError(f"Validation failed setting '{path}':\n{e}") from e
 
@@ -156,34 +276,52 @@ class ConfigInstance:
     # ------------ metadata -------------------------------------------- #
 
     def get_metadata(self, path: str) -> Dict[str, Any]:
-        keys = path.split("/")
-        cur: Union[Type[BaseModel], BaseModel] = self._model_cls
-        for k in keys:
-            if not hasattr(cur, "model_fields"):
+        keys = path.split(".")
+        cur_model: Union[Type[BaseModel], BaseModel] = self._model_cls
+        active_obj: BaseModel | Any = self._active
+        default_obj: BaseModel | Any = self._defaults
+
+        for idx, k in enumerate(keys):
+            if not hasattr(cur_model, "model_fields"):
                 raise KeyError(f"'{path}' is not a model field.")
-            field = cur.model_fields[k]
-            cur = field.annotation
+            field = cur_model.model_fields[k]
+            if idx < len(keys) - 1:
+                cur_model = field.annotation
+                active_obj = getattr(active_obj, k)
+                default_obj = getattr(default_obj, k)
 
         extra = dict(field.json_schema_extra or {})
-        extra.update(
-            {
-                "type": field.annotation,
-                "required": field.is_required(),
-                "default": field.default,
-                "editable": extra.get("editable", True),
-                **_extract_constraints(field),
-            }
-        )
+        meta = {
+            "type": field.annotation,
+            "required": field.is_required(),
+            "default": field.default,
+            "editable": extra.get("editable", True),
+            **_extract_constraints(field),
+            "active_value": _deep_get(self._active, keys),
+            "default_value": _deep_get(self._defaults, keys),
+        }
+
+        saved_val = PydanticUndefined
+        if self._save_path and self._save_path.exists():
+            disk = self._load_from_disk()
+            if disk is not None:
+                try:
+                    saved_val = _deep_get(disk, keys)
+                except Exception:
+                    saved_val = PydanticUndefined
+
+        meta["saved_value"] = saved_val
+        extra.update(meta)
         return extra
 
     # ------------ restore helpers ------------------------------------- #
 
     def restore_value(self, path: str, source: str = "default"):
         if source == "default":
-            new_val = _deep_get(self._defaults, path.split("/"))
+            new_val = _deep_get(self._defaults, path.split("."))
         elif source == "file":
             disk = self._load_from_disk() or self._defaults
-            new_val = _deep_get(disk, path.split("/"))
+            new_val = _deep_get(disk, path.split("."))
         else:
             raise ValueError("source must be 'default' or 'file'")
         self.set_value(path, new_val)
@@ -214,11 +352,15 @@ class ConfigInstance:
 
     save = persist  # alias
 
-    def save_as(self, path: os.PathLike | str, *, file_format: str | None = None) -> bool:
+    def save_as(
+        self, path: os.PathLike | str, *, file_format: str | None = None
+    ) -> bool:
         path = Path(path).expanduser().resolve()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            _dump_file(path, self._active.model_dump(mode="json"), file_format=file_format)
+            _dump_file(
+                path, self._active.model_dump(mode="json"), file_format=file_format
+            )
             log.info("Config '%s' exported to %s", self.name, path)
             return True
         except Exception as exc:
@@ -339,6 +481,57 @@ class _ConfigManagerInternal:
     def restore_all_defaults(self):
         for inst in self._instances.values():
             inst.restore_defaults()
+
+    def update_model_field(
+        self,
+        config_name: str,
+        field_path: str,
+        new_field_definition: "FieldInfo",
+    ) -> bool:
+        """Dynamically update a field definition on a registered model."""
+
+        from pydantic import create_model
+        from pydantic.fields import FieldInfo
+
+        inst = self._instances[config_name]
+        parts = field_path.split(".")
+
+        def _rebuild(model_cls: Type[BaseModel], keys: List[str]) -> Type[BaseModel]:
+            name = keys[0]
+            field = model_cls.model_fields[name]
+            if len(keys) == 1:
+                fields = {
+                    n: (f.annotation, new_field_definition if n == name else f)
+                    for n, f in model_cls.model_fields.items()
+                }
+                New = create_model(model_cls.__name__, __base__=model_cls.__bases__[0], **fields)
+                New.model_rebuild(force=True)
+                return New
+            else:
+                nested = _rebuild(field.annotation, keys[1:])
+                fields = {
+                    n: (
+                        nested if n == name else f.annotation,
+                        f,
+                    )
+                    for n, f in model_cls.model_fields.items()
+                }
+                New = create_model(model_cls.__name__, __base__=model_cls.__bases__[0], **fields)
+                New.model_rebuild(force=True)
+                return New
+
+        candidate_cls = _rebuild(inst._model_cls, parts)
+
+        try:
+            new_active = candidate_cls(**inst._active.model_dump(mode="python"))
+        except ValidationError as exc:
+            log.error("Model update failed: %s", exc)
+            return False
+
+        inst._model_cls = candidate_cls
+        inst._active = new_active
+        inst._defaults = candidate_cls()
+        return True
 
     # ---------- helpers ----------------------------------------------- #
 

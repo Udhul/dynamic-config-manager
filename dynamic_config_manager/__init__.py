@@ -20,7 +20,7 @@ Main ideas
   * do nothing → file is saved to
     `<default_dir>/<name>.json` **(default_dir is a stable folder inside
     `tempfile.gettempdir()` unless you override it once early in your app)**;
-  * pass `save_path=` to push the file somewhere else;  
+  * pass `save_path=` to push the file somewhere else;
   * pass `persistent=False` for memory-only configs.
 
 Quick example
@@ -65,15 +65,14 @@ import logging as _logging
 # --------------------------------------------------------------------- #
 # Version
 # --------------------------------------------------------------------- #
-try:  # When installed (pip/poetry)
-    __version__: str = _meta.version("dynamic_config_manager")
-except _meta.PackageNotFoundError:  # Editable checkout / source tree
-    __version__ = "0.2.0"
+from ._version import __version__
 
 # --------------------------------------------------------------------- #
 # Logging
 # --------------------------------------------------------------------- #
-_logging.getLogger(__name__).addHandler(_logging.NullHandler()) # *never* touch the root logger.
+_logging.getLogger(__name__).addHandler(
+    _logging.NullHandler()
+)  # *never* touch the root logger.
 
 # --------------------------------------------------------------------- #
 # Public re-exports
@@ -81,14 +80,41 @@ _logging.getLogger(__name__).addHandler(_logging.NullHandler()) # *never* touch 
 from pydantic_settings import BaseSettings  # noqa: E402
 from pydantic import BaseModel, Field, ValidationError  # noqa: E402
 
+from .helpers import DynamicBaseSettings, ConfigField  # noqa: E402
 from .manager import ConfigManager  # noqa: E402  (singleton instance)
-from .validation import attach_auto_fix
+from .validation import (
+    attach_auto_fix,
+    NumericPolicy,
+    OptionsPolicy,
+    RangePolicy,
+    MultipleChoicePolicy,
+    ListConversionPolicy,
+    FixStatusEnum,
+    BooleanPolicy,
+    DatetimePolicy,
+    PathPolicy,
+    MultipleRangesPolicy,
+)
+from .watchers import watch_and_reload
 
 __all__ = [
     "ConfigManager",
     "BaseSettings",
     "BaseModel",
     "Field",
+    "DynamicBaseSettings",
+    "ConfigField",
     "ValidationError",
-    "attach_auto_fix"
+    "attach_auto_fix",
+    "NumericPolicy",
+    "OptionsPolicy",
+    "RangePolicy",
+    "MultipleChoicePolicy",
+    "ListConversionPolicy",
+    "FixStatusEnum",
+    "BooleanPolicy",
+    "DatetimePolicy",
+    "PathPolicy",
+    "MultipleRangesPolicy",
+    "watch_and_reload",
 ]
