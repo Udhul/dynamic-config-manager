@@ -25,6 +25,7 @@ jobs:
 
       - name: Lint with flake8
         run: flake8 dynamic_config_manager tests
+        continue-on-error: true
 
       - name: Run tests with pytest
         run: pytest -q

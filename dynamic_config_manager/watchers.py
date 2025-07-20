@@ -17,6 +17,7 @@ def _norm_path(path: Path) -> str:
         return s.lower()
     return s
 
+
 __all__ = ["watch_and_reload"]
 
 
