@@ -5,8 +5,17 @@ from pathlib import Path
 from typing import Iterable, Tuple
 
 from watchfiles import watch, Change
+import os
 
 from .manager import ConfigManager
+
+
+def _norm_path(path: Path) -> str:
+    resolved = path.resolve()
+    s = str(resolved)
+    if os.name == "nt":
+        return s.lower()
+    return s
 
 __all__ = ["watch_and_reload"]
 
@@ -34,14 +43,14 @@ def watch_and_reload(
     stop_event = threading.Event()
 
     def _loop() -> None:
-        file_map: dict[Path, object] = {}
+        file_map: dict[str, object] = {}
         watch_paths = set()
         for name, inst in ConfigManager._instances.items():
             if names and name not in names:
                 continue
             if inst._save_path:
                 fpath = inst._save_path.resolve()
-                file_map[fpath] = inst
+                file_map[_norm_path(fpath)] = inst
                 watch_paths.add(fpath.parent)
 
         if not watch_paths:
@@ -51,8 +60,8 @@ def watch_and_reload(
             for change, p in changes:
                 if change not in (Change.modified, Change.added):
                     continue
-                path = Path(p).resolve()
-                inst = file_map.get(path) or file_map.get(path.parent)
+                path = Path(p)
+                inst = file_map.get(_norm_path(path)) or file_map.get(_norm_path(path.parent))
                 if inst:
                     loaded = inst._load_from_disk()
                     inst._active = loaded or inst._defaults.model_copy(deep=True)
