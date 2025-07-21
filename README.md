@@ -39,9 +39,11 @@ cfg = ConfigManager.register("ui", UIConfig, auto_save=True)
 cfg.active.theme = "dark"  # validated and persisted
 ```
 
-## API Reference
+## Documentation
 
-See [developer_spec.md](developer_spec.md) for a detailed specification of all available helpers and manager features.
+User and API documentation is available in the [`docs/`](docs/) directory.
+- [User Guide](docs/user_guide.md)
+- [API Reference](docs/api_reference.md)
 
 ## Watching for Changes
 
