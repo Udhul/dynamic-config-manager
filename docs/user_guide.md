@@ -26,6 +26,28 @@ class UIConfig(DynamicBaseSettings):
 `ConfigField` wraps `pydantic.Field` and accepts extras such as `options`,
 `ui_hint`, `autofix_settings` and `format_spec`.
 
+### Nested Configuration Models
+
+Configuration models can include other Pydantic settings classes to build
+hierarchies of values. Define nested models and reference them using
+`ConfigField` with a `default_factory`.
+
+```python
+from typing import Optional
+from dynamic_config_manager import DynamicBaseSettings, ConfigField, ConfigManager
+
+class AppSettings(DynamicBaseSettings):
+    class Nested(DynamicBaseSettings):
+        nested_value: float = ConfigField(0.5, ge=0, le=1)
+        deeply_nested: Optional[str] = ConfigField("deep")
+
+    nested: Nested = ConfigField(default_factory=Nested)
+
+app_cfg = ConfigManager.register("app", AppSettings)
+app_cfg.active.nested.nested_value = 0.75
+app_cfg.set_value("nested.deeply_nested", "new")
+```
+
 ## Registering a Configuration
 
 Use `ConfigManager.register` to register your model and optionally enable persistence.
