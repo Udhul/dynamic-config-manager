@@ -592,7 +592,7 @@ def attach_auto_fix(
     boolean_policy: str | BooleanPolicy = "binary",
     path_policy: str | PathPolicy = "resolve",
     multiple_ranges_policy: str | MultipleRangesPolicy = "reject",
-    eval_expressions: bool = False,
+    eval_expressions: bool = True,
 ) -> type[BaseModel] | Any:
     """Attach a model-level validator injecting automatic corrections.
 
