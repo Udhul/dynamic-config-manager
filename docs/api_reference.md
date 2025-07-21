@@ -70,10 +70,10 @@ wraps `pydantic.Field` and attaches keys such as `ui_hint`, `options`,
 
 ## Validation Helpers
 
-`attach_auto_fix()` adds a model validator which pre-processes incoming values
-before Pydantic validation. Important keyword arguments:
+`attach_auto_fix()` adds a model validator which processes incoming values
+before/after Pydantic validation. Important keyword arguments:
 
-- `mode="before" | "after"` – when the validator runs.
+- `mode="before" | "after"` – when the validator runs relative to Pydantic validation.
 - `numeric_policy` – how numeric values outside their bounds are handled.
 - `options_policy` – behaviour when a string is not in allowed `options`.
 - `range_policy` – handling of two-value ranges.
