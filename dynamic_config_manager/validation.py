@@ -592,7 +592,7 @@ def attach_auto_fix(
     boolean_policy: str | BooleanPolicy = "binary",
     path_policy: str | PathPolicy = "resolve",
     multiple_ranges_policy: str | MultipleRangesPolicy = "reject",
-    eval_expressions: bool = False,
+    eval_expressions: bool = True,
 ) -> type[BaseModel] | Any:
     """Attach a model-level validator injecting automatic corrections.
 
@@ -650,8 +650,10 @@ def attach_auto_fix(
                     overrides.get("multiple_ranges_policy", multi_range_pol)
                 )
 
-                low = _field_meta_get(info, "ge") or _field_meta_get(info, "gt")
-                high = _field_meta_get(info, "le") or _field_meta_get(info, "lt")
+                ge_val = _field_meta_get(info, "ge")
+                low = ge_val if ge_val is not None else _field_meta_get(info, "gt")
+                le_val = _field_meta_get(info, "le")
+                high = le_val if le_val is not None else _field_meta_get(info, "lt")
                 m_len = _field_meta_get(info, "min_length")
                 M_len = _field_meta_get(info, "max_length")
                 mult_of = _field_meta_get(info, "multiple_of")
