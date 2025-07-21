@@ -11,6 +11,11 @@ from dynamic_config_manager import (
 class NumCfg(DynamicBaseSettings):
     val: int = ConfigField(1, ge=0, le=10)
 
+
+@attach_auto_fix(eval_expressions=True)
+class FloatCfg(DynamicBaseSettings):
+    val: float = ConfigField(1.0, ge=0)
+
 @attach_auto_fix()
 class OptCfg(DynamicBaseSettings):
     tool: str = ConfigField("flat", options=["flat", "ball", "vbit"])
@@ -71,6 +76,13 @@ def test_numeric_expression(tmp_path):
     inst = ConfigManager.register("num", NumCfg)
     inst.active.val = "5*2"
     assert inst.active.val == 10
+
+
+def test_float_expression(tmp_path):
+    ConfigManager.default_dir = tmp_path
+    inst = ConfigManager.register("float", FloatCfg)
+    inst.active.val = "2+3"
+    assert inst.active.val == 5
 
 
 def test_options_nearest_match(tmp_path):
