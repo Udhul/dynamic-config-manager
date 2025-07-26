@@ -93,6 +93,9 @@ print(cfg.default.font_size)    # 12
 print(cfg.saved.theme)          # value loaded from disk
 ```
 
+The `.saved` accessor is also available via `.file` and returns
+`PydanticUndefined` if the configuration has never been persisted.
+
 ## Persistence Helpers
 
 Call `persist()` to write the current values to disk or `save_as()` to export using a chosen format.

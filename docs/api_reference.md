@@ -48,6 +48,7 @@ Represents one configuration model and its lifecycle.
   validation and optional auto-save.
 - `default` – read-only access to the model default values.
 - `saved` – read-only access to the values loaded from disk (alias: `file`).
+  Returns `PydanticUndefined` if the configuration has not been persisted yet.
 - `meta` – attribute-style access returning metadata dictionaries.
 
 ### Methods

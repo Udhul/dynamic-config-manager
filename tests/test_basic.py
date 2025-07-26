@@ -1,4 +1,5 @@
 import json
+from pydantic.fields import PydanticUndefined
 from dynamic_config_manager import (
     ConfigManager,
     DynamicBaseSettings,
@@ -89,3 +90,12 @@ def test_default_and_saved_accessors(tmp_path):
     assert inst.default.foo == 1
     assert inst.saved.foo == 5
     assert inst.file.foo == 5
+
+
+def test_saved_accessor_no_file(tmp_path):
+    ConfigManager.default_dir = tmp_path
+    inst = ConfigManager.register("simple", SimpleCfg)
+
+    assert inst.active.foo == 1
+    assert inst.saved.foo is PydanticUndefined
+    assert inst.file.foo is PydanticUndefined
