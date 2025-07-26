@@ -77,6 +77,12 @@ print(cfg.active.font_size)     # 12
 
 cfg.set_value("font_size", 16)
 print(cfg.get_value("font_size"))
+print(cfg.get_default("font_size"))
+print(cfg.get_saved("font_size"))
+
+# missing attributes return None unless a default is provided
+print(cfg.get_value("nope"))            # None
+print(cfg.get_value("nope", 42))       # 42
 ```
 
 `cfg.meta` provides metadata describing each field.
@@ -85,6 +91,16 @@ print(cfg.get_value("font_size"))
 info = cfg.meta.theme
 print(info["options"])          # ["light", "dark"]
 ```
+
+Read-only accessors expose the model defaults and the last saved state:
+
+```python
+print(cfg.default.font_size)    # 12
+print(cfg.saved.theme)          # value loaded from disk
+```
+
+The `.saved` accessor is also available via `.file` and returns
+`PydanticUndefined` if the configuration has never been persisted.
 
 ## Persistence Helpers
 
