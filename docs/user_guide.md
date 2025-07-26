@@ -86,6 +86,13 @@ info = cfg.meta.theme
 print(info["options"])          # ["light", "dark"]
 ```
 
+Read-only accessors expose the model defaults and the last saved state:
+
+```python
+print(cfg.default.font_size)    # 12
+print(cfg.saved.theme)          # value loaded from disk
+```
+
 ## Persistence Helpers
 
 Call `persist()` to write the current values to disk or `save_as()` to export using a chosen format.

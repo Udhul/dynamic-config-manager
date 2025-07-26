@@ -46,6 +46,8 @@ Represents one configuration model and its lifecycle.
 
 - `active` – attribute-style access to the current values. Writing triggers
   validation and optional auto-save.
+- `default` – read-only access to the model default values.
+- `saved` – read-only access to the values loaded from disk (alias: `file`).
 - `meta` – attribute-style access returning metadata dictionaries.
 
 ### Methods

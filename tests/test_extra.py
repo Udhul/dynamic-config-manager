@@ -94,17 +94,17 @@ def test_watch_and_reload_autofix(tmp_path: Path):
 
     path = tmp_path / "auto.json"
     thread, stop = watch_and_reload(["auto"], debounce=100)
-    
+
     # Give watcher time to start
     time.sleep(0.1)
-    
+
     data = json.loads(path.read_text())
     data["val"] = "5*2"
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(data, f)
         f.flush()
         os.fsync(f.fileno())
-    
+
     time.sleep(1)
     stop.set()
     thread.join(timeout=1)

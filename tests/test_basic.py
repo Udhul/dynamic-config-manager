@@ -76,3 +76,16 @@ def test_restore_defaults_autosave(tmp_path):
     inst.restore_defaults()
     assert inst.active.foo == 1
     assert json.loads(path.read_text())["foo"] == 1
+
+
+def test_default_and_saved_accessors(tmp_path):
+    ConfigManager.default_dir = tmp_path
+    inst = ConfigManager.register("simple", SimpleCfg)
+    inst.set_value("foo", 5)
+    inst.persist()
+    inst.set_value("foo", 7)
+
+    assert inst.active.foo == 7
+    assert inst.default.foo == 1
+    assert inst.saved.foo == 5
+    assert inst.file.foo == 5

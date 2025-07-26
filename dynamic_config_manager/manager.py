@@ -55,6 +55,42 @@ class _MetaAccessorProxy(Generic[T]):
         return meta
 
 
+class _DefaultAccessorProxy(Generic[T]):
+    """Attribute style accessor for default values (read-only)."""
+
+    def __init__(self, inst: "ConfigInstance", prefix: str = ""):
+        object.__setattr__(self, "_inst", inst)
+        object.__setattr__(self, "_prefix", prefix)
+
+    def __getattr__(self, item: str):
+        path = f"{self._prefix}.{item}" if self._prefix else item
+        val = _deep_get(self._inst._defaults, path.split("."))
+        if isinstance(val, BaseModel):
+            return _DefaultAccessorProxy(self._inst, path)
+        return val
+
+    def __setattr__(self, item: str, value: Any):
+        raise AttributeError("Default values are read-only")
+
+
+class _SavedAccessorProxy(Generic[T]):
+    """Attribute style accessor for values persisted on disk (read-only)."""
+
+    def __init__(self, inst: "ConfigInstance", prefix: str = ""):
+        object.__setattr__(self, "_inst", inst)
+        object.__setattr__(self, "_prefix", prefix)
+
+    def __getattr__(self, item: str):
+        path = f"{self._prefix}.{item}" if self._prefix else item
+        val = self._inst._get_saved_value(path)
+        if isinstance(val, BaseModel):
+            return _SavedAccessorProxy(self._inst, path)
+        return val
+
+    def __setattr__(self, item: str, value: Any):
+        raise AttributeError("Saved values are read-only")
+
+
 # --------------------------------------------------------------------------- #
 #                              helpers                                         #
 # --------------------------------------------------------------------------- #
@@ -248,6 +284,17 @@ class ConfigInstance:
     def meta(self) -> _MetaAccessorProxy[T]:
         return _MetaAccessorProxy(self)
 
+    @property
+    def default(self) -> _DefaultAccessorProxy[T]:
+        return _DefaultAccessorProxy(self)
+
+    @property
+    def saved(self) -> _SavedAccessorProxy[T]:
+        return _SavedAccessorProxy(self)
+
+    # alias for convenience
+    file = saved
+
     def get_value(self, path: str) -> Any:
         return _deep_get(self._active, path.split("."))
 
@@ -383,6 +430,18 @@ class ConfigInstance:
                 e,
             )
             return None
+
+    def _get_saved_value(self, path: str) -> Any:
+        """Return value from the persisted file or ``PydanticUndefined``."""
+        keys = path.split(".")
+        if self._save_path and self._save_path.exists():
+            disk = self._load_from_disk()
+            if disk is not None:
+                try:
+                    return _deep_get(disk, keys)
+                except Exception:
+                    pass
+        return PydanticUndefined
 
 
 # ---------- util ----------------------------------------------------------- #
