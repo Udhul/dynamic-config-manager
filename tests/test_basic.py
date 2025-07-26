@@ -99,3 +99,27 @@ def test_saved_accessor_no_file(tmp_path):
     assert inst.active.foo == 1
     assert inst.saved.foo is PydanticUndefined
     assert inst.file.foo is PydanticUndefined
+
+
+def test_get_helpers_and_defaults(tmp_path):
+    ConfigManager.default_dir = tmp_path
+    inst = ConfigManager.register("simple", SimpleCfg)
+    inst.set_value("foo", 5)
+    inst.persist()
+    inst.set_value("foo", 7)
+
+    assert inst.get_value("foo") == 7
+    assert inst.get("foo") == 7
+    assert inst.get_active("foo") == 7
+    assert inst.get_default("foo") == 1
+    assert inst.get_saved("foo") == 5
+
+    assert inst.get_value("missing") is None
+    assert inst.get_default("missing") is None
+    assert inst.get_saved("missing") is None
+    assert inst.get_metadata("missing") is None
+
+    assert inst.get_value("missing", 1) == 1
+    assert inst.get_default("missing", 2) == 2
+    assert inst.get_saved("missing", 3) == 3
+    assert inst.get_metadata("missing", 4) == 4

@@ -77,6 +77,12 @@ print(cfg.active.font_size)     # 12
 
 cfg.set_value("font_size", 16)
 print(cfg.get_value("font_size"))
+print(cfg.get_default("font_size"))
+print(cfg.get_saved("font_size"))
+
+# missing attributes return None unless a default is provided
+print(cfg.get_value("nope"))            # None
+print(cfg.get_value("nope", 42))       # 42
 ```
 
 `cfg.meta` provides metadata describing each field.

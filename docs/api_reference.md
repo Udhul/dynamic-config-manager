@@ -53,7 +53,11 @@ Represents one configuration model and its lifecycle.
 
 ### Methods
 
-- `get_value(path)` / `set_value(path, value)` – dotted path access.
+- `get_value(path, default=None)` – dotted path access. Alias: `get`,
+  `get_active`. Returns `default` when the path does not exist.
+- `get_default(path, default=None)` – read from the model defaults.
+- `get_saved(path, default=None)` – read from the persisted file (if any).
+- `set_value(path, value)` – update a value with validation.
 - `persist(file_format=None) -> bool` – write the current values to disk;
   returns `True` on success. Alias: `save`.
 - `save_as(path, *, file_format=None) -> bool` – export the configuration to
@@ -62,8 +66,9 @@ Represents one configuration model and its lifecycle.
   defaults or from the saved file.
 - `restore_defaults()` – replace the active state with defaults and optionally
   save if `auto_save` was enabled.
-- `get_metadata(path)` – return a dictionary describing the field at `path`
-  including constraints and the active, default and saved values.
+- `get_metadata(path, default=None)` – return a dictionary describing the field
+  at `path` including constraints and the active, default and saved values.
+  Returns `default` if the path does not exist.
 
 ## Base Classes and Helpers
 

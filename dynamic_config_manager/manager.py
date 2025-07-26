@@ -295,8 +295,25 @@ class ConfigInstance:
     # alias for convenience
     file = saved
 
-    def get_value(self, path: str) -> Any:
-        return _deep_get(self._active, path.split("."))
+    def get_value(self, path: str, default: Any | None = None) -> Any:
+        try:
+            return _deep_get(self._active, path.split("."))
+        except Exception:
+            return default
+
+    # aliases for convenience
+    get = get_value
+    get_active = get_value
+
+    def get_default(self, path: str, default: Any | None = None) -> Any:
+        try:
+            return _deep_get(self._defaults, path.split("."))
+        except Exception:
+            return default
+
+    def get_saved(self, path: str, default: Any | None = None) -> Any:
+        val = self._get_saved_value(path)
+        return default if val is PydanticUndefined else val
 
     def set_value(self, path: str, value: Any):
         meta = self.get_metadata(path)
@@ -322,44 +339,45 @@ class ConfigInstance:
 
     # ------------ metadata -------------------------------------------- #
 
-    def get_metadata(self, path: str) -> Dict[str, Any]:
-        keys = path.split(".")
-        cur_model: Union[Type[BaseModel], BaseModel] = self._model_cls
-        active_obj: BaseModel | Any = self._active
-        default_obj: BaseModel | Any = self._defaults
+    def get_metadata(self, path: str, default: Any | None = None) -> Dict[str, Any] | Any:
+        try:
+            keys = path.split(".")
+            cur_model: Union[Type[BaseModel], BaseModel] = self._model_cls
+            for idx, k in enumerate(keys):
+                if not hasattr(cur_model, "model_fields"):
+                    raise KeyError(path)
+                field = cur_model.model_fields.get(k)
+                if field is None:
+                    raise KeyError(k)
+                if idx < len(keys) - 1:
+                    cur_model = field.annotation
 
-        for idx, k in enumerate(keys):
-            if not hasattr(cur_model, "model_fields"):
-                raise KeyError(f"'{path}' is not a model field.")
-            field = cur_model.model_fields[k]
-            if idx < len(keys) - 1:
-                cur_model = field.annotation
-                active_obj = getattr(active_obj, k)
-                default_obj = getattr(default_obj, k)
+            active_val = _deep_get(self._active, keys)
+            default_val = _deep_get(self._defaults, keys)
 
-        extra = dict(field.json_schema_extra or {})
-        meta = {
-            "type": field.annotation,
-            "required": field.is_required(),
-            "default": field.default,
-            "editable": extra.get("editable", True),
-            **_extract_constraints(field),
-            "active_value": _deep_get(self._active, keys),
-            "default_value": _deep_get(self._defaults, keys),
-        }
+            meta = {
+                "type": field.annotation,
+                "required": field.is_required(),
+                "default": field.default,
+                "editable": (field.json_schema_extra or {}).get("editable", True),
+                **_extract_constraints(field),
+                "active_value": active_val,
+                "default_value": default_val,
+            }
 
-        saved_val = PydanticUndefined
-        if self._save_path and self._save_path.exists():
-            disk = self._load_from_disk()
-            if disk is not None:
-                try:
-                    saved_val = _deep_get(disk, keys)
-                except Exception:
-                    saved_val = PydanticUndefined
+            saved_val = PydanticUndefined
+            if self._save_path and self._save_path.exists():
+                disk = self._load_from_disk()
+                if disk is not None:
+                    try:
+                        saved_val = _deep_get(disk, keys)
+                    except Exception:
+                        saved_val = PydanticUndefined
 
-        meta["saved_value"] = saved_val
-        extra.update(meta)
-        return extra
+            meta["saved_value"] = saved_val
+            return meta
+        except Exception:
+            return default
 
     # ------------ restore helpers ------------------------------------- #
 
