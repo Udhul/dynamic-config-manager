@@ -5,3 +5,5 @@ test_configs
 *.code-workspace
 .vscode
 .venv
+.augment
+.pytest_cache
