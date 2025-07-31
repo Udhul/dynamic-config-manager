@@ -22,6 +22,7 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
     *   Path-based deep access (`get_value("path.to.value")`, `set_value("path.to.value", ...)`) for configuration values, using `.` as a delimiter.
     *   Attribute-style access via `config_instance.active.path.to.value` for both getting (triggers `get_value`) and setting (triggers `set_value`) values, ensuring full validation and auto-save pipeline.
     *   Easy metadata retrieval for any field via `config_instance.meta.path.to.value` (or `get_metadata("path.to.value")`) returning a comprehensive metadata object.
+    *   Field introspection via `get_field_names(path="")` for retrieving all registered field names, with optional scoping to nested paths.
 *   Automatic validation and (optional) auto-saving on value changes made through `set_value` or attribute-style assignment.
 *   Restore functionality for individual values or entire configurations to defaults or file-persisted state.
 *   `attach_auto_fix` decorator for Pydantic models to enable input pre-processing for various data formats (numeric, options, ranges, multiple choice, list conversions, etc.):
@@ -240,7 +241,7 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
     *   `get_metadata(path: str) -> Dict[str, Any]`: Path uses `.` as delimiter.
         *   Retrieves comprehensive metadata for a field specified by a path string.
         *   The process involves introspecting `self._model_cls` down the `path` segments.
-        *   **Enhanced in v1.3+** to return a dictionary including:
+        *   Returns a dictionary including:
             *   `type` (annotation), `required`, `default` (from `FieldInfo`)
             *   `description` (field description from `FieldInfo.description`)
             *   `editable` (from `json_schema_extra`, defaults to `True`)
@@ -249,10 +250,18 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
                 *   `ui_hint`, `ui_extra`, `options`, `format_spec` (from `json_schema_extra`)
                 *   `autofix_settings` (mapped from `json_schema_extra["autofix"]`)
             *   Pydantic constraints (`ge`, `le`, etc.) extracted via `_extract_constraints`
-    *   **Enhancement:** The dictionary returned by `get_metadata(path)` will also include:
+    *   The dictionary returned by `get_metadata(path)` also includes:
         *   `active_value: Any` (current value from `_active` at `path`, obtained via `_deep_get(self._active, path.split('.'))`).
         *   `default_value: Any` (value from `_defaults` at `path`, obtained via `_deep_get(self._defaults, path.split('.'))`).
         *   `saved_value: Any` (Value loaded from the persisted file for this specific path. This might involve loading the file if not recently cached, then using `_deep_get`. Could be a sentinel like `PydanticUndefined` if the file doesn't exist or the path is not in the file).
+*   **Field Introspection:**
+    *   `get_field_names(path: str = "") -> List[str]`: Path uses `.` as delimiter.
+        *   Retrieves all registered field names from the configuration model, optionally scoped to a nested path.
+        *   When `path` is empty or not provided, returns all field names from the root level, including nested fields as dot-separated paths (e.g., `["port", "db.host", "db.port"]`).
+        *   When `path` is provided, returns field names relative to that nested model (e.g., `get_field_names("db")` returns `["host", "port"]`).
+        *   Returned field names are compatible with `get_value()`, `set_value()`, and `get_metadata()` methods.
+        *   Raises `KeyError` for invalid paths and `ValueError` for paths pointing to non-model fields.
+        *   Uses internal `_collect_field_names()` helper function for recursive field traversal.
 *   **Persistence:**
     *   `persist(file_format: Optional[str]=None) -> bool` (alias: `save`):
         *   Saves the `_active.model_dump(mode="json")` to `_save_path`.

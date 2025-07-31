@@ -94,11 +94,19 @@ print(info["description"])      # field description
 print(info["ui_hint"])          # UI hint for rendering
 print(info["active_value"])     # current value
 print(info["default_value"])    # model default value
+
+# Get all field names for dynamic UI generation
+field_names = cfg.get_field_names()
+print(field_names)              # ["theme", "font_size"]
+
+# Get field names for nested sections
+nested_fields = cfg.get_field_names("nested")  # if nested config exists
+print(nested_fields)            # ["nested_value", "deeply_nested"]
 ```
 
-### Enhanced Metadata Access (v1.3+)
+### Comprehensive Metadata Access
 
-The `get_metadata()` method now returns complete field information including:
+The `get_metadata()` method returns complete field information including:
 
 - **`description`** – field description from ConfigField
 - **`json_schema_extra`** – complete metadata dictionary
@@ -108,7 +116,7 @@ The `get_metadata()` method now returns complete field information including:
   - `options` – allowed values for choice fields
   - `autofix_settings` – auto-fixing policies for validation
   - `format_spec` – advanced format specifications
-- **All existing metadata** – type, constraints, active/default/saved values
+- **Standard metadata** – type, constraints, active/default/saved values
 
 ```python
 from dynamic_config_manager import DynamicBaseSettings, ConfigField, ConfigManager
@@ -141,6 +149,28 @@ print(cfg.saved.theme)          # value loaded from disk
 
 The `.saved` accessor is also available via `.file` and returns
 `PydanticUndefined` if the configuration has never been persisted.
+
+## Field Introspection
+
+Use `get_field_names()` to discover all available fields in a configuration, which is useful for building dynamic UIs or programmatically working with configurations.
+
+```python
+# Get all field names from the root level
+all_fields = cfg.get_field_names()
+print(all_fields)               # ["theme", "font_size", "nested.value"]
+
+# Get field names scoped to a specific nested section
+db_fields = cfg.get_field_names("database")
+print(db_fields)                # ["host", "port", "username"]
+
+# Use field names with other methods
+for field in all_fields:
+    value = cfg.get_value(field)
+    metadata = cfg.get_metadata(field)
+    print(f"{field}: {value} (type: {metadata['type'].__name__})")
+```
+
+The returned field names are fully compatible with `get_value()`, `set_value()`, and `get_metadata()` methods, making it easy to build dynamic configuration interfaces.
 
 ## Persistence Helpers
 

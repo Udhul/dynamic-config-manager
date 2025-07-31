@@ -67,13 +67,20 @@ Represents one configuration model and its lifecycle.
 - `restore_defaults()` – replace the active state with defaults and optionally
   save if `auto_save` was enabled.
 - `get_metadata(path, default=None)` – return a comprehensive dictionary describing the field
-  at `path`. **Enhanced in v1.3+** to include:
+  at `path`. Includes:
   - `description` – field description from ConfigField
   - `json_schema_extra` – complete field metadata dictionary  
   - Flattened common attributes: `ui_hint`, `ui_extra`, `options`, `autofix_settings`, `format_spec`
-  - All existing metadata: `type`, `required`, `default`, `editable`, constraints, 
+  - Standard metadata: `type`, `required`, `default`, `editable`, constraints, 
     `active_value`, `default_value`, `saved_value`
   - Returns `default` if the path does not exist.
+- `get_field_names(path="") -> List[str]` – return all registered field names, optionally 
+  scoped to a nested path. When `path` is empty, returns all field names from the root 
+  including nested ones as dot-separated paths (e.g., `["port", "db.host", "db.port"]`). 
+  When `path` is provided, returns field names relative to that nested model (e.g., 
+  `get_field_names("db")` returns `["host", "port"]`). Returned field names are 
+  compatible with `get_value()`, `set_value()`, and `get_metadata()` methods. Raises 
+  `KeyError` for invalid paths and `ValueError` for paths pointing to non-model fields.
 
 ## Base Classes and Helpers
 
