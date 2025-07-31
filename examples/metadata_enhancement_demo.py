@@ -4,7 +4,7 @@ Demonstration of Enhanced Metadata Functionality
 ================================================
 
 This script demonstrates the new comprehensive metadata access capabilities
-that were added to dynamic-config-manager v1.1+.
+that were added to dynamic-config-manager v1.3+.
 
 The ConfigInstance.get_metadata() method now returns complete field metadata
 including:

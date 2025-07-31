@@ -96,7 +96,7 @@ print(info["active_value"])     # current value
 print(info["default_value"])    # model default value
 ```
 
-### Enhanced Metadata Access (v1.1+)
+### Enhanced Metadata Access (v1.3+)
 
 The `get_metadata()` method now returns complete field information including:
 

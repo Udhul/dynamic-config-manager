@@ -67,7 +67,7 @@ Represents one configuration model and its lifecycle.
 - `restore_defaults()` – replace the active state with defaults and optionally
   save if `auto_save` was enabled.
 - `get_metadata(path, default=None)` – return a comprehensive dictionary describing the field
-  at `path`. **Enhanced in v1.1+** to include:
+  at `path`. **Enhanced in v1.3+** to include:
   - `description` – field description from ConfigField
   - `json_schema_extra` – complete field metadata dictionary  
   - Flattened common attributes: `ui_hint`, `ui_extra`, `options`, `autofix_settings`, `format_spec`

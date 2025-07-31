@@ -240,7 +240,7 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
     *   `get_metadata(path: str) -> Dict[str, Any]`: Path uses `.` as delimiter.
         *   Retrieves comprehensive metadata for a field specified by a path string.
         *   The process involves introspecting `self._model_cls` down the `path` segments.
-        *   **Enhanced in v1.1+** to return a dictionary including:
+        *   **Enhanced in v1.3+** to return a dictionary including:
             *   `type` (annotation), `required`, `default` (from `FieldInfo`)
             *   `description` (field description from `FieldInfo.description`)
             *   `editable` (from `json_schema_extra`, defaults to `True`)
