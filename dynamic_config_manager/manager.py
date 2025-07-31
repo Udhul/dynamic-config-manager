@@ -359,11 +359,26 @@ class ConfigInstance:
                 "type": field.annotation,
                 "required": field.is_required(),
                 "default": field.default,
+                "description": field.description,
                 "editable": (field.json_schema_extra or {}).get("editable", True),
                 **_extract_constraints(field),
                 "active_value": active_val,
                 "default_value": default_val,
             }
+
+            # Include full json_schema_extra content
+            if field.json_schema_extra:
+                meta["json_schema_extra"] = field.json_schema_extra.copy()
+                
+                # Flatten common ConfigField attributes for convenience
+                common_attrs = ["ui_hint", "ui_extra", "options", "format_spec"]
+                for attr in common_attrs:
+                    if attr in field.json_schema_extra:
+                        meta[attr] = field.json_schema_extra[attr]
+                
+                # Handle autofix_settings (stored as "autofix" in json_schema_extra)
+                if "autofix" in field.json_schema_extra:
+                    meta["autofix_settings"] = field.json_schema_extra["autofix"]
 
             saved_val = PydanticUndefined
             if self._save_path and self._save_path.exists():

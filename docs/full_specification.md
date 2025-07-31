@@ -238,9 +238,17 @@ To create a Python package, `dynamic-config-manager`, providing a robust, typed,
     *   They should robustly handle numeric strings in paths (e.g., "items.0.name") as list indices when traversing.
 *   **Metadata:**
     *   `get_metadata(path: str) -> Dict[str, Any]`: Path uses `.` as delimiter.
-        *   Retrieves metadata for a field specified by a path string.
+        *   Retrieves comprehensive metadata for a field specified by a path string.
         *   The process involves introspecting `self._model_cls` down the `path` segments.
-        *   Returns a dictionary including: `type` (annotation), `required`, `default` (from `FieldInfo`), `editable` (from `json_schema_extra`, defaults to `True`), Pydantic constraints (`ge`, `le`, etc.), and any other `json_schema_extra` content (including `ui_hint`, `ui_extra`, `options`, `autofix` settings, `format_spec`).
+        *   **Enhanced in v1.1+** to return a dictionary including:
+            *   `type` (annotation), `required`, `default` (from `FieldInfo`)
+            *   `description` (field description from `FieldInfo.description`)
+            *   `editable` (from `json_schema_extra`, defaults to `True`)
+            *   `json_schema_extra` (complete field metadata dictionary copy)
+            *   **Flattened common attributes** for convenience access:
+                *   `ui_hint`, `ui_extra`, `options`, `format_spec` (from `json_schema_extra`)
+                *   `autofix_settings` (mapped from `json_schema_extra["autofix"]`)
+            *   Pydantic constraints (`ge`, `le`, etc.) extracted via `_extract_constraints`
     *   **Enhancement:** The dictionary returned by `get_metadata(path)` will also include:
         *   `active_value: Any` (current value from `_active` at `path`, obtained via `_deep_get(self._active, path.split('.'))`).
         *   `default_value: Any` (value from `_defaults` at `path`, obtained via `_deep_get(self._defaults, path.split('.'))`).

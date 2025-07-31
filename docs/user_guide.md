@@ -85,11 +85,51 @@ print(cfg.get_value("nope"))            # None
 print(cfg.get_value("nope", 42))       # 42
 ```
 
-`cfg.meta` provides metadata describing each field.
+`cfg.meta` provides comprehensive metadata describing each field.
 
 ```python
 info = cfg.meta.theme
 print(info["options"])          # ["light", "dark"]
+print(info["description"])      # field description
+print(info["ui_hint"])          # UI hint for rendering
+print(info["active_value"])     # current value
+print(info["default_value"])    # model default value
+```
+
+### Enhanced Metadata Access (v1.1+)
+
+The `get_metadata()` method now returns complete field information including:
+
+- **`description`** – field description from ConfigField
+- **`json_schema_extra`** – complete metadata dictionary
+- **Flattened attributes** – common ConfigField attributes available at top level:
+  - `ui_hint` – UI rendering hint (e.g., "ComboBox", "Slider")  
+  - `ui_extra` – additional UI parameters (e.g., step, min/max values)
+  - `options` – allowed values for choice fields
+  - `autofix_settings` – auto-fixing policies for validation
+  - `format_spec` – advanced format specifications
+- **All existing metadata** – type, constraints, active/default/saved values
+
+```python
+from dynamic_config_manager import DynamicBaseSettings, ConfigField, ConfigManager
+
+class AdvancedConfig(DynamicBaseSettings):
+    port: int = ConfigField(
+        default=8080,
+        description="Server port number", 
+        ui_hint="SpinBox",
+        ui_extra={"step": 1, "suffix": " (port)"},
+        ge=1024, le=65535
+    )
+
+cfg = ConfigManager.register("advanced", AdvancedConfig)
+meta = cfg.get_metadata("port")
+
+print(meta["description"])      # "Server port number"
+print(meta["ui_hint"])          # "SpinBox" 
+print(meta["ui_extra"])         # {"step": 1, "suffix": " (port)"}
+print(meta["ge"])               # 1024 (constraint)
+print(meta["active_value"])     # 8080 (current value)
 ```
 
 Read-only accessors expose the model defaults and the last saved state:

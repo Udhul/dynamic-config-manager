@@ -66,9 +66,14 @@ Represents one configuration model and its lifecycle.
   defaults or from the saved file.
 - `restore_defaults()` – replace the active state with defaults and optionally
   save if `auto_save` was enabled.
-- `get_metadata(path, default=None)` – return a dictionary describing the field
-  at `path` including constraints and the active, default and saved values.
-  Returns `default` if the path does not exist.
+- `get_metadata(path, default=None)` – return a comprehensive dictionary describing the field
+  at `path`. **Enhanced in v1.1+** to include:
+  - `description` – field description from ConfigField
+  - `json_schema_extra` – complete field metadata dictionary  
+  - Flattened common attributes: `ui_hint`, `ui_extra`, `options`, `autofix_settings`, `format_spec`
+  - All existing metadata: `type`, `required`, `default`, `editable`, constraints, 
+    `active_value`, `default_value`, `saved_value`
+  - Returns `default` if the path does not exist.
 
 ## Base Classes and Helpers
 
@@ -123,7 +128,7 @@ Supported `type` values include:
 - **path_string** – normalise path strings with existence and type checks.
 - **multiple_ranges** – list of range tuples with aggregate constraints.
 
-See `developer_spec.md` Appendix B for the precise options of each type.
+See `full_specification.md` Appendix B for the precise options of each type.
 
 ## File Watching
 
