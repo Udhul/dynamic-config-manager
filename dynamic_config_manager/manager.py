@@ -464,6 +464,48 @@ class ConfigInstance:
             )
             return None
 
+    def get_field_names(self, path: str = "") -> List[str]:
+        """
+        Get all registered field names, optionally scoped to a nested path.
+        
+        Args:
+            path: Optional dot-separated path to scope field retrieval.
+                  If empty, returns all field names from the root.
+                  
+        Returns:
+            List of field names/paths that can be used with get_* methods.
+            For nested fields, returns dot-separated paths (e.g., "nested.field").
+        """
+        if not path:
+            # Return all field names from root
+            return _collect_field_names(self._model_cls)
+        
+        # Validate path and get the target model class
+        keys = path.split(".")
+        cur_model: Union[Type[BaseModel], BaseModel] = self._model_cls
+        
+        for idx, k in enumerate(keys):
+            if not hasattr(cur_model, "model_fields"):
+                raise ValueError(f"Path '{'.'.join(keys[:idx+1])}' does not point to a model with fields")
+                
+            field = cur_model.model_fields.get(k)
+            if field is None:
+                raise KeyError(f"Field '{k}' not found at path '{'.'.join(keys[:idx+1])}'")
+                
+            if idx < len(keys) - 1:
+                # Check if this field is a nested model
+                if not hasattr(field.annotation, "model_fields"):
+                    raise ValueError(f"Path '{'.'.join(keys[:idx+1])}' does not point to a nested model")
+                cur_model = field.annotation
+            else:
+                # Last key - this should be a nested model
+                if not hasattr(field.annotation, "model_fields"):
+                    raise ValueError(f"Path '{path}' does not point to a nested model")
+                cur_model = field.annotation
+        
+        # Collect field names from the target model
+        return _collect_field_names(cur_model)
+
     def _get_saved_value(self, path: str) -> Any:
         """Return value from the persisted file or ``PydanticUndefined``."""
         keys = path.split(".")
@@ -478,6 +520,37 @@ class ConfigInstance:
 
 
 # ---------- util ----------------------------------------------------------- #
+
+
+def _collect_field_names(model_cls: Type[BaseModel], prefix: str = "") -> List[str]:
+    """
+    Recursively collect all field names from a Pydantic model.
+    
+    Args:
+        model_cls: The Pydantic model class to traverse
+        prefix: Current path prefix for nested fields
+        
+    Returns:
+        List of field names/paths
+    """
+    field_names = []
+    
+    if not hasattr(model_cls, "model_fields"):
+        return field_names
+        
+    for field_name, field_info in model_cls.model_fields.items():
+        current_path = f"{prefix}.{field_name}" if prefix else field_name
+        
+        # Check if the field is a nested BaseModel
+        if hasattr(field_info.annotation, "model_fields"):
+            # Recursively collect nested field names
+            nested_names = _collect_field_names(field_info.annotation, current_path)
+            field_names.extend(nested_names)
+        else:
+            # Add leaf field
+            field_names.append(current_path)
+    
+    return field_names
 
 
 def _extract_constraints(field) -> Dict[str, Any]:
